@@ -12,8 +12,6 @@ select ok(public.can_read_org('11111111-1111-1111-1111-111111111111'),
           'A1 voit son organisation');
 select ok(not public.can_read_org('22222222-2222-2222-2222-222222222222'),
           'A1 ne voit pas Beta');
-select ok(not public.can_read_org(null),
-          'can_read_org(null) court-circuite avant même de considérer le rôle');
 reset role;
 
 -- Acting as agent 1, who covers Acme and Beta.
@@ -38,6 +36,8 @@ set local request.jwt.claims = '{"sub":"a0000000-0000-0000-0000-000000000001","r
 set local role authenticated;
 select ok(public.can_read_org('33333333-3333-3333-3333-333333333333'),
           'l''administrateur voit toute organisation');
+select ok(not public.can_read_org(null),
+          'can_read_org(null) est faux même pour l''administrateur');
 reset role;
 
 -- A deactivated account resolves to nothing.
