@@ -1,5 +1,5 @@
 begin;
-select plan(7);
+select plan(8);
 
 -- Helper: insert an auth user the way a given arrival route would.
 create or replace function pg_temp.new_auth_user(
@@ -88,6 +88,18 @@ select pg_temp.new_auth_user('t6@allin.test', 'google', false, false) as t6_id \
 select is(
   (select count(*)::int from public.profiles where id = :'t6_id'),
   0, 'un agent arrivant par OAuth sans adresse confirmée n''obtient aucun profil'
+);
+
+-- 8. The real GoTrue invite sequence: the row is inserted with invited_at
+-- still NULL, then a separate UPDATE sets it. The client must still get
+-- attached, through the AFTER UPDATE OF invited_at trigger.
+insert into public.invitations (email, role, org_id)
+values ('t7@allin.test', 'client', '11111111-1111-1111-1111-111111111111');
+select pg_temp.new_auth_user('t7@allin.test', 'email', false, false) as t7_id \gset
+update auth.users set invited_at = now() where id = :'t7_id';
+select is(
+  (select role::text from public.profiles where id = :'t7_id'),
+  'client', 'un client invité via /auth/v1/invite obtient son profil dès que invited_at est renseigné'
 );
 
 select * from finish();
