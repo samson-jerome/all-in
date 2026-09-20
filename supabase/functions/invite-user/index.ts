@@ -71,7 +71,7 @@ Deno.serve(async (req) => {
     const nowIso = new Date().toISOString();
     const { data: consumed, error: consumeError } = await admin
       .from("invitations")
-      .update({ status: "accepted", accepted_at: nowIso })
+      .update({ status: "accepted", accepted_at: nowIso, role, org_id: orgId })
       .eq("email", email)
       .eq("status", "pending")
       .select("id")
