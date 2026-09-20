@@ -61,7 +61,9 @@ select
 from auth.users u
 where u.email like '%@allin.test';
 
--- The orphan account is deliberately left without a profile.
+-- inactive@allin.test is deactivated after the fact, to exercise the
+-- "deactivated account" case. orphan@allin.test is a separate fixture: it
+-- has no invitation at all, so the trigger never gives it a profile.
 update public.profiles set is_active = false
  where id = 'c0000000-0000-0000-0000-000000000004';
 

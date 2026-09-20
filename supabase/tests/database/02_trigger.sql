@@ -1,5 +1,5 @@
 begin;
-select plan(5);
+select plan(7);
 
 -- Helper: insert an auth user the way a given arrival route would.
 create or replace function pg_temp.new_auth_user(
@@ -71,6 +71,23 @@ select pg_temp.new_auth_user('t4@allin.test', 'email', false, true) as t4_id \gs
 select is(
   (select count(*)::int from public.profiles where id = :'t4_id'),
   0, 'une inscription par mot de passe ne peut pas s''emparer d''une invitation d''agent'
+);
+
+-- 6. The internal positive path: an agent invitation arriving through OAuth
+-- with a confirmed address does produce a profile.
+insert into public.invitations (email, role) values ('t5@allin.test', 'agent');
+select pg_temp.new_auth_user('t5@allin.test', 'google', false, true) as t5_id \gset
+select is(
+  (select role::text from public.profiles where id = :'t5_id'),
+  'agent', 'un agent arrivant par OAuth avec une adresse confirmée obtient son profil'
+);
+
+-- 7. Same route, but the address is not confirmed: no profile is created.
+insert into public.invitations (email, role) values ('t6@allin.test', 'agent');
+select pg_temp.new_auth_user('t6@allin.test', 'google', false, false) as t6_id \gset
+select is(
+  (select count(*)::int from public.profiles where id = :'t6_id'),
+  0, 'un agent arrivant par OAuth sans adresse confirmée n''obtient aucun profil'
 );
 
 select * from finish();

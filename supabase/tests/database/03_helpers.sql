@@ -1,5 +1,5 @@
 begin;
-select plan(11);
+select plan(13);
 
 -- Acting as client A1.
 set local request.jwt.claims = '{"sub":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}';
@@ -12,6 +12,8 @@ select ok(public.can_read_org('11111111-1111-1111-1111-111111111111'),
           'A1 voit son organisation');
 select ok(not public.can_read_org('22222222-2222-2222-2222-222222222222'),
           'A1 ne voit pas Beta');
+select ok(not public.can_read_org(null),
+          'can_read_org(null) court-circuite avant même de considérer le rôle');
 reset role;
 
 -- Acting as agent 1, who covers Acme and Beta.
@@ -24,6 +26,11 @@ select ok(public.can_read_org('22222222-2222-2222-2222-222222222222'),
           'agent1 voit Beta, qui est dans son portefeuille');
 select ok(not public.can_read_org('33333333-3333-3333-3333-333333333333'),
           'agent1 ne voit pas Ceres');
+select ok(
+  public.agent_covers_org('22222222-2222-2222-2222-222222222222')
+  and not public.agent_covers_org('33333333-3333-3333-3333-333333333333'),
+  'agent_covers_org isolé : vrai pour Beta, faux pour Ceres'
+);
 reset role;
 
 -- Acting as the administrator.
