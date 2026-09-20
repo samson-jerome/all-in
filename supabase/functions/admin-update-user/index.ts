@@ -1,5 +1,5 @@
 import { handleCors, jsonResponse } from "../_shared/cors.ts";
-import { adminClient, requireAdmin } from "../_shared/auth.ts";
+import { adminClient, APP_ROLES, requireAdmin, viaConfirmedOAuth } from "../_shared/auth.ts";
 
 Deno.serve(async (req) => {
   const preflight = handleCors(req);
@@ -19,6 +19,23 @@ Deno.serve(async (req) => {
     return jsonResponse(400, { error: "cannot_modify_self" });
   }
 
+  // Validate body.role directly, not the value coalesced with the current
+  // role further down -- otherwise an explicit `role: null` silently
+  // collapses into "no change" while still taking the role-is-changing
+  // path, and the caller gets a misleading 200 for a write that never
+  // happened.
+  if (body?.role !== undefined && !APP_ROLES.includes(body.role)) {
+    return jsonResponse(400, { error: "invalid_role" });
+  }
+
+  if (body?.org_id !== undefined && body.org_id !== null && typeof body.org_id !== "string") {
+    return jsonResponse(400, { error: "invalid_org_id" });
+  }
+
+  if (body?.is_active !== undefined && typeof body.is_active !== "boolean") {
+    return jsonResponse(400, { error: "invalid_is_active" });
+  }
+
   const admin = adminClient();
 
   const { data: current, error: readError } = await admin
@@ -32,12 +49,23 @@ Deno.serve(async (req) => {
 
   const nextRole = body?.role ?? current.role;
 
+  // Mirrors invite-user: an internal role never carries an org_id. A caller
+  // who omits org_id entirely keeps the existing behaviour of forcing it to
+  // null below; only an explicit, non-null value is rejected here.
+  if (
+    (nextRole === "agent" || nextRole === "admin") &&
+    body?.org_id !== undefined &&
+    body.org_id !== null
+  ) {
+    return jsonResponse(400, { error: "org_forbidden_for_internal" });
+  }
+
   // A client account arrived by e-mail/password. Promoting it to an internal
   // role would reproduce the exact privilege escalation invite-user already
   // refuses, through a different door: internal staff must authenticate via
-  // OAuth. Same predicate as handle_new_user() and invite-user's
-  // viaConfirmedOAuth, sourced from the GoTrue admin API since this endpoint
-  // only has a user_id, not an e-mail. Checked before any write.
+  // OAuth. Same predicate as handle_new_user() and invite-user
+  // (viaConfirmedOAuth), sourced from the GoTrue admin API since this
+  // endpoint only has a user_id, not an e-mail. Checked before any write.
   if ((nextRole === "agent" || nextRole === "admin") && current.role === "client") {
     const { data: authUser, error: authUserError } = await admin.auth.admin.getUserById(userId);
     if (authUserError || !authUser?.user) {
@@ -47,13 +75,9 @@ Deno.serve(async (req) => {
       });
     }
 
-    // app_metadata is server-set (GoTrue writes it on OAuth sign-in);
-    // user_metadata is client-controlled and must never be trusted here.
-    const provider = authUser.user.app_metadata?.provider;
-    const viaConfirmedOAuth =
-      provider != null && provider !== "email" && authUser.user.email_confirmed_at != null;
-
-    if (!viaConfirmedOAuth) {
+    if (
+      !viaConfirmedOAuth(authUser.user.app_metadata?.provider, authUser.user.email_confirmed_at)
+    ) {
       return jsonResponse(409, { error: "arrival_route_mismatch" });
     }
   }
@@ -61,9 +85,6 @@ Deno.serve(async (req) => {
   const update: Record<string, unknown> = {};
 
   if (body?.role !== undefined) {
-    if (!["client", "agent", "admin"].includes(nextRole)) {
-      return jsonResponse(400, { error: "invalid_role" });
-    }
     update.role = nextRole;
   }
 
@@ -78,14 +99,26 @@ Deno.serve(async (req) => {
   }
 
   if (body?.is_active !== undefined) {
-    if (typeof body.is_active !== "boolean") {
-      return jsonResponse(400, { error: "invalid_is_active" });
-    }
     update.is_active = body.is_active;
   }
 
-  // Leaving the agent role behind means leaving the portfolio behind.
-  if (nextRole !== "agent" && current.role === "agent") {
+  // Purge the portfolio only on the transition into `client`: a client has
+  // no portfolio, so that destination is the one that must arrive empty.
+  // Moving between agent and admin, in either direction, keeps the rows --
+  // an administrator holding portfolio rows is inert, because
+  // can_read_org() grants admins access through its own branch without ever
+  // consulting agent_organizations, and keeping the rows means a later
+  // demotion back to agent restores the person's original scope instead of
+  // starting from nothing.
+  //
+  // This delete is not wrapped in a transaction with the profile update
+  // below (no RPC exists for that here, and adding one is out of scope for
+  // this change). Keep the delete first: if only one of the two writes
+  // lands, "still an agent with an empty portfolio" fails closed, whereas
+  // the reverse order risks "demoted to client, but the portfolio row
+  // survives" if the delete fails after the update already succeeded. Do
+  // not reorder this.
+  if (nextRole === "client") {
     const { error } = await admin.from("agent_organizations").delete().eq("agent_id", userId);
     if (error) return jsonResponse(500, { error: "portfolio_cleanup_failed", detail: error.message });
   }

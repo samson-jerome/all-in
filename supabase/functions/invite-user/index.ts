@@ -1,5 +1,5 @@
 import { handleCors, jsonResponse } from "../_shared/cors.ts";
-import { adminClient, normalizeEmail, requireAdmin } from "../_shared/auth.ts";
+import { adminClient, APP_ROLES, normalizeEmail, requireAdmin, viaConfirmedOAuth } from "../_shared/auth.ts";
 
 Deno.serve(async (req) => {
   const preflight = handleCors(req);
@@ -14,7 +14,7 @@ Deno.serve(async (req) => {
   const orgId = body?.org_id ?? null;
 
   if (!email) return jsonResponse(400, { error: "invalid_email" });
-  if (!["client", "agent", "admin"].includes(role)) {
+  if (!APP_ROLES.includes(role)) {
     return jsonResponse(400, { error: "invalid_role" });
   }
   if (role === "client" && !orgId) {
@@ -47,9 +47,7 @@ Deno.serve(async (req) => {
       // arrival proves this account was not created by a self-service
       // password signup. admin_find_user_by_email returns provider and
       // is_confirmed for exactly this check, so the two rules cannot drift.
-      const viaConfirmedOAuth =
-        existing.provider != null && existing.provider !== "email" && existing.is_confirmed;
-      if (!viaConfirmedOAuth) {
+      if (!viaConfirmedOAuth(existing.provider, existing.is_confirmed)) {
         return jsonResponse(409, { error: "arrival_route_mismatch" });
       }
     }
