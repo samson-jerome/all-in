@@ -172,7 +172,24 @@ enable_refresh_token_rotation = true
 # Requires enable_refresh_token_rotation = true.
 refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
-enable_signup = true
+# Closed: entry into this product is on invitation only (no self-
+# registration -- see the trigger comment in
+# 20260920125831_fix_handle_new_user_invited_at.sql for why this matters).
+# This is deliberately the global flag, not [auth.email]'s: GoTrue's
+# per-provider "enabled" flags gate the whole provider, login included --
+# empirically, turning off [auth.email] enable_signup also refuses password
+# grants for every existing user, which breaks every fixture login and
+# leaves no way to authenticate as admin at all. This global flag instead
+# blocks only the creation of new users (verified: POST /auth/v1/signup is
+# refused, existing users still get a token, and the invite-user Edge
+# Function -- which calls the admin API with service_role -- is unaffected,
+# since GoTrue's admin-created-user path does not go through this check).
+# Caveat for whoever wires up OAuth in a later task: this flag is global,
+# so it will also block a first-time OAuth login from auto-provisioning an
+# internal user's account, which the product needs. That trade-off could
+# not be validated here since no OAuth provider is configured yet; revisit
+# this flag then.
+enable_signup = false
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts

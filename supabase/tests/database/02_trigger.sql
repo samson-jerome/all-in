@@ -1,5 +1,5 @@
 begin;
-select plan(8);
+select plan(10);
 
 -- Helper: insert an auth user the way a given arrival route would.
 create or replace function pg_temp.new_auth_user(
@@ -100,6 +100,22 @@ update auth.users set invited_at = now() where id = :'t7_id';
 select is(
   (select role::text from public.profiles where id = :'t7_id'),
   'client', 'un client invité via /auth/v1/invite obtient son profil dès que invited_at est renseigné'
+);
+
+-- 9. Same scenario: the invitation itself must also be consumed, not just
+-- the profile created.
+select is(
+  (select status from public.invitations where email = 't7@allin.test'),
+  'accepted', 'l''invitation via /auth/v1/invite passe aussi en accepted'
+);
+
+-- 10. Idempotence guard: firing the trigger a second time for the same user
+-- (a further UPDATE of invited_at, as GoTrue could in principle issue) must
+-- not duplicate the profile or violate profiles_pkey.
+update auth.users set invited_at = now() where id = :'t7_id';
+select is(
+  (select count(*)::int from public.profiles where id = :'t7_id'),
+  1, 'un second déclenchement sur invited_at ne duplique pas le profil'
 );
 
 select * from finish();

@@ -7,13 +7,20 @@
 -- through the product's main onboarding route.
 --
 -- The fix makes the trigger also fire on the UPDATE that sets invited_at.
--- This is safe: only GoTrue and service_role can write to auth.users, a
--- self-service password signup never gets invited_at set (so it still
--- cannot reach the client branch), and the role/arrival-route rule that
--- protects the agent/admin branch is untouched. Firing twice for the same
--- user (once on INSERT, once on the later UPDATE) is now possible, so the
--- function gains an idempotence guard that returns early once a profile
--- already exists for that user.
+-- This relies on password self-registration being closed at the auth layer
+-- (supabase/config.toml, [auth] enable_signup = false, the global flag --
+-- see the comment there for why it is the global one and not
+-- [auth.email]'s): GoTrue's invite call reuses whatever auth.users row
+-- already matches that email, so if self-registration were open, a
+-- squatter could create that row first with their own password and this
+-- trigger would attach the invited role to the squatter's account the
+-- moment GoTrue set invited_at on it. With signup closed, no such row can
+-- exist ahead of an invitation, so the only account a client invitation can
+-- ever attach to is the one GoTrue's own insert just created. The
+-- role/arrival-route rule that protects the agent/admin branch is
+-- untouched. Firing twice for the same user (once on INSERT, once on the
+-- later UPDATE) is now possible, so the function gains an idempotence guard
+-- that returns early once a profile already exists for that user.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
