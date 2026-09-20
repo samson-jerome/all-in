@@ -1,5 +1,5 @@
 begin;
-select plan(12);
+select plan(16);
 
 -- Client A1: one organization, and the profiles of that organization.
 set local request.jwt.claims = '{"sub":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}';
@@ -30,6 +30,11 @@ select lives_ok(
      where id = 'c0000000-0000-0000-0000-000000000001'$$,
   'un utilisateur peut se renommer'
 );
+select is(
+  (select full_name from public.profiles
+    where id = 'c0000000-0000-0000-0000-000000000001'),
+  'Chloé M.', 'le renommage de soi-même est bien enregistré'
+);
 
 prepare self_promote as
   update public.profiles set role = 'admin'
@@ -57,6 +62,20 @@ set local request.jwt.claims = '{"sub":"a0000000-0000-0000-0000-000000000001","r
 set local role authenticated;
 select is((select count(*)::int from public.organizations), 3,
           'l''administrateur voit toutes les organisations');
+
+update public.organizations set name = 'Acme SA'
+ where id = '11111111-1111-1111-1111-111111111111';
+select is(
+  (select name from public.organizations
+    where id = '11111111-1111-1111-1111-111111111111'),
+  'Acme SA', 'l''administrateur peut renommer une organisation'
+);
+select lives_ok(
+  $$insert into public.organizations (name, slug) values ('Delta', 'delta')$$,
+  'l''administrateur peut créer une organisation'
+);
+select is((select count(*)::int from public.profiles), 7,
+          'l''administrateur voit tous les profils');
 
 prepare admin_deletes_org as
   delete from public.organizations
