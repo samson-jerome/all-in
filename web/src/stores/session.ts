@@ -100,7 +100,9 @@ export const useSessionStore = defineStore("session", () => {
       if (orgError) {
         // Same defect ruling 3 fixed for the profile query, one query
         // later: a silent failure here would under-scope an agent's visible
-        // organisations instead of surfacing as a failure.
+        // organisations instead of surfacing as a failure. profile is
+        // cleared too, consistent with every other path into 'error'.
+        profile.value = null;
         agentOrgIds.value = [];
         error.value = orgError;
         status.value = "error";
@@ -134,7 +136,11 @@ export const useSessionStore = defineStore("session", () => {
     try {
       await promise;
     } finally {
-      if (pendingApply.promise === promise) pendingApply = null;
+      // pendingApply may already have been reassigned (a different id) and
+      // then cleared by that other call's own finally by the time this one
+      // runs -- optional chaining, not a plain property read, since a null
+      // pendingApply here is an expected outcome, not a bug.
+      if (pendingApply?.promise === promise) pendingApply = null;
     }
   }
 
