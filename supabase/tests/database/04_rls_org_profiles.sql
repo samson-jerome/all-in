@@ -1,6 +1,16 @@
 begin;
 select plan(16);
 
+-- Captured here, before any `set local role`, so it is the unrestricted count
+-- of the whole table. The administrator's assertion below compares against
+-- this rather than against a hard-coded 8: a literal turns every environment
+-- that has ever run `npm run admin:bootstrap` -- which adds a real account --
+-- into a false alarm, while proving nothing more. Compared this way the
+-- assertion still fails the moment profiles_select loses its administrator
+-- branch (an admin carries a null org_id, so can_read_org() alone leaves them
+-- with their own row), and never fails over a row somebody legitimately added.
+select count(*)::int as profiles_total from public.profiles \gset
+
 -- Client A1: one organization, and the profiles of that organization.
 set local request.jwt.claims = '{"sub":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}';
 set local role authenticated;
@@ -74,7 +84,7 @@ select lives_ok(
   $$insert into public.organizations (name, slug) values ('Delta', 'delta')$$,
   'l''administrateur peut créer une organisation'
 );
-select is((select count(*)::int from public.profiles), 8,
+select is((select count(*)::int from public.profiles), :profiles_total,
           'l''administrateur voit tous les profils');
 
 prepare admin_deletes_org as

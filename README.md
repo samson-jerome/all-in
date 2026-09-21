@@ -19,7 +19,9 @@ npm run db:start
 npm run db:reset                # migrations et jeu de fixtures
 npm run db:types
 
-cd web && npm install && cp .env.example .env.local && npm run dev
+cd web && npm install
+cp .env.example .env.local        # renseigner les valeurs, cf. le fichier
+npm run dev
 ```
 
 Les deux fichiers d'exemple ne portent pas les mêmes variables : celui de la

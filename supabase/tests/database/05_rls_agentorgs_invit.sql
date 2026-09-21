@@ -1,6 +1,15 @@
 begin;
 select plan(9);
 
+-- Captured before any `set local role`, so it is the unrestricted count of the
+-- whole table -- same reasoning as 04_rls_org_profiles.sql: a hard-coded 8
+-- fails on every environment where a real `npm run admin:bootstrap` has added
+-- an invitation, without telling anyone anything about RLS. Compared this way
+-- the assertion still fails if invitations_select stops granting the
+-- administrator (nobody else may read that table at all), and never fails over
+-- a row somebody legitimately added.
+select count(*)::int as invitations_total from public.invitations \gset
+
 -- Agent 1 sees their own portfolio, and nothing of the invitations table.
 set local request.jwt.claims = '{"sub":"b0000000-0000-0000-0000-000000000001","role":"authenticated"}';
 set local role authenticated;
@@ -44,7 +53,7 @@ reset role;
 set local request.jwt.claims = '{"sub":"a0000000-0000-0000-0000-000000000001","role":"authenticated"}';
 set local role authenticated;
 
-select is((select count(*)::int from public.invitations), 8,
+select is((select count(*)::int from public.invitations), :invitations_total,
           'l''administrateur voit toutes les invitations');
 select lives_ok(
   $$insert into public.agent_organizations (agent_id, org_id)
