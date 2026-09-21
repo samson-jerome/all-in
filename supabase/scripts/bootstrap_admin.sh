@@ -62,6 +62,39 @@ if ! command -v psql >/dev/null 2>&1; then
   exit 1
 fi
 
+# DATABASE_URL est une URI `postgresql://utilisateur:motdepasse@hôte/base`.
+# Passée telle quelle en argument à psql, elle est lisible dans `ps` — donc le
+# mot de passe de la base — par n'importe quel utilisateur local, pendant toute
+# la durée de l'appel. C'est exactement la menace contre laquelle les deux
+# en-têtes portant la clé service_role passent par `--config -` plus bas :
+# même fichier, même danger, traitement inverse.
+#
+# Le mot de passe est donc retiré de l'URI et déplacé dans PGPASSWORD, que
+# libpq consulte quand la chaîne de connexion n'en porte pas. L'environnement
+# d'un processus n'est lisible que par son propre utilisateur et par root,
+# là où /proc/<pid>/cmdline l'est par tout le monde.
+#
+# Seul le mot de passe est extrait, et rien d'autre n'est décomposé : l'hôte,
+# le port, la base et d'éventuels paramètres (`?sslmode=require`, courant sur
+# un environnement distant) continuent d'être analysés par libpq, qui sait le
+# faire, plutôt que par un découpage maison qui s'y casserait.
+#
+# Si DATABASE_URL n'est pas une URI à mot de passe — une chaîne `key=value`,
+# un nom de base, ou une URI sans mot de passe — rien ne correspond et la
+# valeur passe inchangée, comme avant.
+PSQL_TARGET="$DATABASE_URL"
+if [[ "$DATABASE_URL" =~ ^(postgres(ql)?://)([^:/?#@]*):([^@/?#]*)@(.*)$ ]]; then
+  # libpq décode les %XX d'une URI ; PGPASSWORD, non. Le mot de passe est donc
+  # décodé ici, sans quoi un mot de passe contenant un caractère encodé
+  # arriverait différent de ce qu'il était dans l'URI. Les antislashs sont
+  # doublés d'abord, `printf '%b'` les interprétant lui aussi.
+  raw_password="${BASH_REMATCH[4]//\\/\\\\}"
+  PGPASSWORD="$(printf '%b' "${raw_password//%/\\x}")"
+  export PGPASSWORD
+  unset raw_password
+  PSQL_TARGET="${BASH_REMATCH[1]}${BASH_REMATCH[3]}@${BASH_REMATCH[5]}"
+fi
+
 # Normalisée ici comme elle l'est en base (contrainte email = lower(trim(email))),
 # pour que la lecture finale du rôle interroge bien la même adresse.
 EMAIL="${BOOTSTRAP_ADMIN_EMAIL#"${BOOTSTRAP_ADMIN_EMAIL%%[![:space:]]*}"}"
@@ -139,7 +172,7 @@ cleanup() {
   [ "$mail_sent" = non ] || return 0
   [ -n "$invitation_id" ] || return 0
 
-  if psql "$DATABASE_URL" \
+  if psql "$PSQL_TARGET" \
       --quiet --tuples-only --no-align \
       --set=ON_ERROR_STOP=1 \
       --set=id="$invitation_id" \
@@ -160,7 +193,7 @@ trap cleanup EXIT
 
 # ON_ERROR_STOP : sans lui, psql signale l'erreur et sort quand même en 0.
 invitation_id="$(
-  psql "$DATABASE_URL" \
+  psql "$PSQL_TARGET" \
     --quiet --tuples-only --no-align \
     --set=ON_ERROR_STOP=1 \
     --set=email="$EMAIL" \
@@ -188,7 +221,7 @@ fi
 # s'applique à un script, stdin compris. C'est ce qui permet d'écrire
 # :'email' ici aussi, et de n'interpoler l'adresse nulle part à la main.
 account_existed="$(
-  psql "$DATABASE_URL" \
+  psql "$PSQL_TARGET" \
     --quiet --tuples-only --no-align \
     --set=ON_ERROR_STOP=1 \
     --set=email="$EMAIL" \
@@ -271,7 +304,7 @@ esac
 # --- 3. Le résultat, lu en base ----------------------------------------------
 # L'opérateur doit voir le rôle réellement posé, pas la promesse qu'il l'a été.
 role="$(
-  psql "$DATABASE_URL" \
+  psql "$PSQL_TARGET" \
     --quiet --tuples-only --no-align \
     --set=ON_ERROR_STOP=1 \
     --set=email="$EMAIL" \

@@ -24,6 +24,14 @@ Deno.serve(async (req) => {
   if (!APP_ROLES.includes(role)) {
     return jsonResponse(400, { error: "invalid_role" });
   }
+  // Same check, same code, same position as admin-update-user: two entry
+  // points answering the same malformed field differently produce bug reports
+  // nobody can resolve. Without it, a non-string org_id fell through to the
+  // insert and came back as a 500 with a PostgREST message, or -- for a
+  // truthy non-string -- as a silently wrong write.
+  if (body?.org_id !== undefined && body.org_id !== null && typeof body.org_id !== "string") {
+    return jsonResponse(400, { error: "invalid_org_id" });
+  }
   if (role === "client" && !orgId) {
     return jsonResponse(400, { error: "org_required_for_client" });
   }
@@ -149,9 +157,42 @@ Deno.serve(async (req) => {
   // so the `type=invite` branch never runs and nobody is ever asked for a
   // password. They land signed in, and are locked out as soon as that first
   // session expires. This is the product's only entry route.
-  const { error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, { redirectTo });
+  //
+  // Logged exhaustively, in both directions. This is the one outbound call the
+  // product makes, the repository's CLAUDE.md requires it of external
+  // integrations, and it earns it: a failed invitation is the most
+  // consequential failure here -- the person simply never arrives -- and it
+  // fails for reasons that live entirely outside this code (SMTP down, wrong
+  // credentials, GoTrue's own email rate limit). Without the payload and the
+  // full response, a production report reads "the invitation did not arrive"
+  // and nothing more. Nothing secret is written: the address is the payload,
+  // and no key or token appears in either direction.
+  console.log(
+    `invite-user: appel inviteUserByEmail, payload ${
+      JSON.stringify({ email, role, org_id: orgId, redirectTo })
+    }`,
+  );
+
+  const { data: inviteData, error: inviteError } = await admin.auth.admin.inviteUserByEmail(
+    email,
+    { redirectTo },
+  );
 
   if (inviteError) {
+    // Rebuilt field by field rather than JSON.stringify(inviteError): an Error
+    // carries `message` as a non-enumerable property, so stringifying it
+    // directly yields "{}" and loses the only part worth reading.
+    console.error(
+      `invite-user: inviteUserByEmail en échec pour ${email}, réponse ${
+        JSON.stringify({
+          name: inviteError.name,
+          status: inviteError.status,
+          code: inviteError.code,
+          message: inviteError.message,
+        })
+      }`,
+    );
+
     // Leave no ghost row that would silently attach a future signup.
     const { error: cleanupError } = await admin
       .from("invitations")
@@ -159,6 +200,9 @@ Deno.serve(async (req) => {
       .eq("id", invitation.id);
 
     if (cleanupError) {
+      console.error(
+        `invite-user: nettoyage de l'invitation ${invitation.id} en échec, ligne orpheline laissée en attente — ${cleanupError.message}`,
+      );
       return jsonResponse(502, {
         error: "invite_email_failed",
         detail: inviteError.message,
@@ -167,8 +211,17 @@ Deno.serve(async (req) => {
       });
     }
 
+    console.log(
+      `invite-user: invitation ${invitation.id} retirée après l'échec d'envoi, aucune ligne fantôme laissée`,
+    );
     return jsonResponse(502, { error: "invite_email_failed", detail: inviteError.message });
   }
+
+  console.log(
+    `invite-user: invitation envoyée à ${email}, invitation ${invitation.id}, utilisateur ${
+      inviteData?.user?.id ?? "inconnu"
+    }`,
+  );
 
   return jsonResponse(200, { status: "invited", invitation_id: invitation.id });
 });
