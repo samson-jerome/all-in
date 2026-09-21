@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import type { Session } from "@supabase/supabase-js";
 
 /**
  * Reproduces the concurrency defect found in review round 3: applySession's
@@ -15,6 +16,17 @@ import { createPinia, setActivePinia } from "pinia";
 
 type AuthCallback = (event: string, session: { user: { id: string } } | null) => void;
 
+// What the mocked profiles query settles with. Named so the deferred map and
+// the deferred it stores agree on one type instead of widening to unknown.
+type ProfileResult = { data: unknown; error: null };
+
+// The store reads nothing from a Session but `user.id`. Building a complete
+// GoTrue Session here would add a dozen irrelevant fields without adding
+// coverage, so the fixture stays narrow and is cast at the mock boundary.
+function sessionFixture(id: string): Session {
+  return { user: { id } } as unknown as Session;
+}
+
 // vi.mock's factory is hoisted above this file's imports, so anything it
 // needs to share with the test body must live inside vi.hoisted too.
 const state = vi.hoisted(() => {
@@ -29,7 +41,7 @@ const state = vi.hoisted(() => {
   return {
     createDeferred,
     authCallback: null as AuthCallback | null,
-    profileDeferreds: new Map<string, { promise: Promise<unknown>; resolve: (value: unknown) => void }>(),
+    profileDeferreds: new Map<string, { promise: Promise<ProfileResult>; resolve: (value: ProfileResult) => void }>(),
   };
 });
 
@@ -49,7 +61,7 @@ vi.mock("@/lib/supabase", () => ({
           select: () => ({
             eq: (_col: string, id: string) => ({
               maybeSingle: () => {
-                const deferred = state.createDeferred<{ data: unknown; error: null }>();
+                const deferred = state.createDeferred<ProfileResult>();
                 state.profileDeferreds.set(id, deferred);
                 return deferred.promise;
               },
@@ -100,7 +112,7 @@ describe("session store applySession coalescing", () => {
     const session = useSessionStore();
 
     // Boot anonymous and register the auth listener, exactly as main.ts does.
-    vi.mocked(supabase.auth.getSession).mockResolvedValueOnce({ data: { session: null } });
+    vi.mocked(supabase.auth.getSession).mockResolvedValueOnce({ data: { session: null }, error: null });
     await session.init();
     expect(state.authCallback).not.toBeNull();
 
@@ -108,7 +120,8 @@ describe("session store applySession coalescing", () => {
     // through the store's own try/catch, which is exactly where the
     // coordinator's "overwrites a correct ready session" consequence shows.
     vi.mocked(supabase.auth.getSession).mockResolvedValueOnce({
-      data: { session: { user: { id: "user-x" } } },
+      data: { session: sessionFixture("user-x") },
+      error: null,
     });
     const syncPromise = session.sync();
 
@@ -148,7 +161,7 @@ describe("session store applySession coalescing", () => {
     const { useSessionStore } = await import("@/stores/session");
     const session = useSessionStore();
 
-    vi.mocked(supabase.auth.getSession).mockResolvedValueOnce({ data: { session: null } });
+    vi.mocked(supabase.auth.getSession).mockResolvedValueOnce({ data: { session: null }, error: null });
     await session.init();
 
     state.authCallback!("SIGNED_IN", { user: { id: "user-z" } });

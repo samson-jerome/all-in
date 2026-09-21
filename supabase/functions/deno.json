@@ -1,0 +1,16 @@
+{
+  // Exists so `deno check` can type-check these files (npm run fn:check at
+  // the repo root). Without it, Deno walks up to the repo's package.json,
+  // finds the Supabase CLI's node_modules instead of its own, and refuses:
+  // "Could not find a matching package for 'npm:@supabase/realtime-js'".
+  // Anchoring a Deno config here makes supabase/functions its own root, and
+  // nodeModulesDir "auto" lets it materialise the npm dependencies that
+  // jsr:@supabase/supabase-js pulls in (into supabase/functions/node_modules,
+  // already covered by .gitignore).
+  //
+  // Deliberately carries no import map: every function imports by full
+  // specifier, and an import map here would be read by `supabase functions
+  // serve` too, changing how the deployed code resolves its imports for no
+  // benefit.
+  "nodeModulesDir": "auto"
+}

@@ -8,7 +8,8 @@
     "db:reset": "supabase db reset",
     "db:test": "supabase test db",
     "db:types": "supabase gen types typescript --local > web/src/lib/database.types.ts",
-    "fn:serve": "supabase functions serve --env-file supabase/functions/.env"
+    "fn:serve": "supabase functions serve --env-file supabase/functions/.env",
+    "fn:check": "deno check --config supabase/functions/deno.json $(find supabase/functions -name '*.ts' -not -path '*/node_modules/*')"
   },
   "devDependencies": {
     "supabase": "^2.0.0"

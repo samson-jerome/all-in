@@ -1,0 +1,19 @@
+{
+  // web/tests/** belonged to no project: tsconfig.app.json only includes
+  // src/**, tsconfig.node.json only vite.config.ts, and tsconfig.json is a
+  // solution file. `vue-tsc -b` therefore type-checked nothing under tests/
+  // -- measured by injecting a deliberate type error there and watching the
+  // gate still exit 0. This project closes that hole.
+  //
+  // It extends the app config so the tests are held to the same rules as the
+  // code they exercise, and adds the Node types the suite needs
+  // (node:child_process in tests/edge-functions.test.ts). src/** is not
+  // re-listed here: the files the tests import are pulled in as dependencies
+  // and checked by tsconfig.app.json, which owns them.
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.vitest.tsbuildinfo",
+    "types": ["vite/client", "node"]
+  },
+  "include": ["tests/**/*.ts"]
+}

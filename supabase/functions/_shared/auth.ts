@@ -73,6 +73,26 @@ export async function requireAdmin(
   return { callerId: userData.user.id };
 }
 
+/**
+ * Row shape returned by public.admin_find_user_by_email (declared in
+ * 20260920130800_admin_find_user_by_email_arrival_route.sql).
+ *
+ * The service_role client is created untyped, so PostgREST resolves an RPC
+ * result to `{}` and every field read off it is a type error -- nine of them,
+ * invisible until `npm run fn:check` started running `deno check` over these
+ * files. The shape is restated here rather than imported from
+ * web/src/lib/database.types.ts because the Supabase bundler only ships what
+ * lives under supabase/functions: a cross-tree import would type-check
+ * locally and fail to deploy. If the SQL function's signature changes, this
+ * type must change with it.
+ */
+export type AccountLookup = {
+  user_id: string;
+  has_profile: boolean;
+  provider: string | null;
+  is_confirmed: boolean;
+};
+
 export function normalizeEmail(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const email = value.trim().toLowerCase();

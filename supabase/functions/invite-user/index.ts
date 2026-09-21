@@ -1,5 +1,11 @@
 import { handleCors, jsonResponse } from "../_shared/cors.ts";
-import { adminClient, APP_ROLES, normalizeEmail, requireAdmin } from "../_shared/auth.ts";
+import {
+  type AccountLookup,
+  adminClient,
+  APP_ROLES,
+  normalizeEmail,
+  requireAdmin,
+} from "../_shared/auth.ts";
 
 Deno.serve(async (req) => {
   const preflight = handleCors(req);
@@ -36,7 +42,7 @@ Deno.serve(async (req) => {
   // invitation nothing will ever consume.
   const { data: existing, error: lookupError } = await admin
     .rpc("admin_find_user_by_email", { p_email: email })
-    .maybeSingle();
+    .maybeSingle<AccountLookup>();
 
   if (lookupError) {
     return jsonResponse(500, { error: "lookup_failed", detail: lookupError.message });

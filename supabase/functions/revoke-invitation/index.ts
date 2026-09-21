@@ -13,7 +13,12 @@
 // Under the new model it means: mark the invitation revoked AND remove the
 // access of the account it created.
 import { handleCors, jsonResponse } from "../_shared/cors.ts";
-import { adminClient, deactivateAccount, requireAdmin } from "../_shared/auth.ts";
+import {
+  type AccountLookup,
+  adminClient,
+  deactivateAccount,
+  requireAdmin,
+} from "../_shared/auth.ts";
 
 Deno.serve(async (req) => {
   const preflight = handleCors(req);
@@ -47,7 +52,7 @@ Deno.serve(async (req) => {
 
   const { data: account, error: lookupError } = await admin
     .rpc("admin_find_user_by_email", { p_email: invitation.email })
-    .maybeSingle();
+    .maybeSingle<AccountLookup>();
 
   if (lookupError) {
     return jsonResponse(500, { error: "lookup_failed", detail: lookupError.message });

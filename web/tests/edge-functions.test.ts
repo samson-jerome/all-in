@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/lib/database.types";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const BASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -125,7 +126,7 @@ describe("contrôle d'accès des Edge Functions", () => {
       // Runs even if the assertion below fails, so the suite stays
       // re-runnable without a db:reset between runs.
       if (!serviceRoleKey) return;
-      const admin = createClient(BASE_URL, serviceRoleKey, {
+      const admin = createClient<Database>(BASE_URL, serviceRoleKey, {
         auth: { persistSession: false, autoRefreshToken: false },
       });
       const { data: found } = await admin
@@ -156,7 +157,7 @@ describe("contrôle d'accès des Edge Functions", () => {
   describe("revoke-invitation, bout en bout", () => {
     const email = `agent-revoke13b-${Date.now()}@allin.test`;
     let serviceRoleKey = "";
-    let admin: ReturnType<typeof createClient>;
+    let admin: SupabaseClient<Database>;
 
     beforeAll(() => {
       // Same approach as the invite-user block above: read the key from the
@@ -167,7 +168,7 @@ describe("contrôle d'accès des Edge Functions", () => {
       const match = output.match(/SERVICE_ROLE_KEY="([^"]+)"/);
       if (!match) throw new Error("clé service_role introuvable dans `supabase status`");
       serviceRoleKey = match[1];
-      admin = createClient(BASE_URL, serviceRoleKey, {
+      admin = createClient<Database>(BASE_URL, serviceRoleKey, {
         auth: { persistSession: false, autoRefreshToken: false },
       });
     });
@@ -205,7 +206,7 @@ describe("contrôle d'accès des Edge Functions", () => {
       const { data: profile } = await admin
         .from("profiles")
         .select("is_active")
-        .eq("id", account?.user_id)
+        .eq("id", account?.user_id ?? "")
         .single();
       expect(profile?.is_active).toBe(false);
 
@@ -255,7 +256,7 @@ describe("contrôle d'accès des Edge Functions", () => {
       const { data: profile } = await admin
         .from("profiles")
         .select("is_active")
-        .eq("id", adminAccount?.user_id)
+        .eq("id", adminAccount?.user_id ?? "")
         .single();
       expect(profile?.is_active).toBe(true);
     });
