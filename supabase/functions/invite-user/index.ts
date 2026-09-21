@@ -3,6 +3,7 @@ import {
   type AccountLookup,
   adminClient,
   APP_ROLES,
+  inviteRedirectTo,
   normalizeEmail,
   requireAdmin,
 } from "../_shared/auth.ts";
@@ -111,6 +112,14 @@ Deno.serve(async (req) => {
     return jsonResponse(200, { status: "profile_created", user_id: existing.user_id });
   }
 
+  // Checked before anything is written: an invitation row we could not send
+  // would have to be deleted again, and a half-done write is worse than a
+  // refusal. See inviteRedirectTo() for why there is no fallback.
+  const redirectTo = inviteRedirectTo();
+  if (!redirectTo) {
+    return jsonResponse(500, { error: "site_url_not_configured" });
+  }
+
   const { data: invitation, error: invitationError } = await admin
     .from("invitations")
     .insert({ email, role, org_id: orgId, invited_by: guard.callerId })
@@ -134,7 +143,13 @@ Deno.serve(async (req) => {
   //
   // The invitation row must exist before this call: it creates the auth user
   // immediately, which fires the trigger that consumes the invitation.
-  const { error: inviteError } = await admin.auth.admin.inviteUserByEmail(email);
+  //
+  // redirectTo is not optional. Without it GoTrue sends the person to its own
+  // `site_url` -- the front's root -- where AuthCallbackView is not mounted,
+  // so the `type=invite` branch never runs and nobody is ever asked for a
+  // password. They land signed in, and are locked out as soon as that first
+  // session expires. This is the product's only entry route.
+  const { error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, { redirectTo });
 
   if (inviteError) {
     // Leave no ghost row that would silently attach a future signup.

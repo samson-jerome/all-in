@@ -42,7 +42,7 @@ if [ -f "$REPO_ROOT/.env" ]; then
 fi
 
 missing=()
-for var in BOOTSTRAP_ADMIN_EMAIL DATABASE_URL SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
+for var in BOOTSTRAP_ADMIN_EMAIL DATABASE_URL SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SITE_URL; do
   if [ -z "${!var:-}" ]; then
     missing+=("$var")
   fi
@@ -52,7 +52,8 @@ if [ ${#missing[@]} -gt 0 ]; then
   echo "Variables manquantes : ${missing[*]}" >&2
   echo "" >&2
   echo "Renseignez-les dans $REPO_ROOT/.env (voir .env.example) ou exportez-les." >&2
-  echo "En local, 'npx supabase status' affiche DB_URL, API_URL et SERVICE_ROLE_KEY." >&2
+  echo "En local, 'npx supabase status' affiche DB_URL, API_URL et SERVICE_ROLE_KEY ;" >&2
+  echo "SITE_URL est l'URL du front, la même que [auth] site_url dans supabase/config.toml." >&2
   exit 1
 fi
 
@@ -76,7 +77,28 @@ if ! printf '%s' "$EMAIL" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space
   exit 1
 fi
 
+# Le lien d'invitation doit atterrir sur l'écran qui réclame un mot de passe,
+# et non à la racine du front. C'est la même règle que celle appliquée par
+# l'Edge Function invite-user (cf. inviteRedirectTo() dans
+# supabase/functions/_shared/auth.ts) : sans `redirect_to` explicite, GoTrue
+# renvoie sur son propre `site_url`, où AuthCallbackView n'est pas montée. La
+# personne se retrouve connectée sans mot de passe défini, et enfermée dehors
+# dès l'expiration de cette première session.
+#
+# Pas de valeur par défaut, pour la même raison que côté Edge Function : une
+# retombée silencieuse sur `site_url` réintroduirait exactement ce défaut.
+#
+# Le contrôle de forme ci-dessous exclut espaces, guillemets, `?`, `#` et `&`,
+# ce qui garantit que l'URL s'interpole sans encodage dans la chaîne de
+# requête plus bas.
+if ! printf '%s' "$SITE_URL" | grep -Eq '^https?://[^[:space:]"?#&]+$'; then
+  echo "SITE_URL doit être une URL http(s) sans paramètres : $SITE_URL" >&2
+  exit 1
+fi
+REDIRECT_TO="${SITE_URL%/}/auth/callback"
+
 echo "Amorçage de l'administrateur $EMAIL"
+echo "  retour     : $REDIRECT_TO"
 
 # --- 1. L'invitation ---------------------------------------------------------
 # ON_ERROR_STOP : sans lui, psql signale l'erreur et sort quand même en 0.
@@ -119,7 +141,7 @@ http_status="$(
   curl --silent --show-error \
     --output "$http_body_file" \
     --write-out '%{http_code}' \
-    --request POST "$SUPABASE_URL/auth/v1/invite" \
+    --request POST "$SUPABASE_URL/auth/v1/invite?redirect_to=$REDIRECT_TO" \
     --header "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
     --header "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
     --header 'Content-Type: application/json' \

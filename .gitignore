@@ -19,6 +19,9 @@ supabase/.env
 *.log
 npm-debug.log*
 
+# Sorties d'outils de pilotage de navigateur
+.playwright-mcp/
+
 # Editors and OS
 .DS_Store
 .idea/

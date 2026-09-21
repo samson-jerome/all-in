@@ -46,24 +46,41 @@ puisque l'inscription libre est fermée.
 BOOTSTRAP_ADMIN_EMAIL=vous@exemple.fr npm run admin:bootstrap
 ```
 
-Il exige `BOOTSTRAP_ADMIN_EMAIL`, `DATABASE_URL`, `SUPABASE_URL` et
-`SUPABASE_SERVICE_ROLE_KEY`, lues dans l'environnement ou dans le `.env` de
-la racine, et refuse de démarrer si l'une manque. Il est idempotent : rejoué,
-il ne crée rien et le dit. Il termine en affichant le rôle du profil tel
-qu'il est en base, et non la promesse qu'il a été posé.
+Il exige `BOOTSTRAP_ADMIN_EMAIL`, `DATABASE_URL`, `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY` et `SITE_URL`, lues dans l'environnement ou dans
+le `.env` de la racine, et refuse de démarrer si l'une manque. Il est
+idempotent : rejoué, il ne crée rien et le dit. Il termine en affichant le
+rôle du profil tel qu'il est en base, et non la promesse qu'il a été posé.
 
 L'administrateur amorcé reçoit un lien d'invitation (sur
 http://127.0.0.1:54324 en local), définit son mot de passe, et se connecte.
 
-**Limite connue.** GoTrue construit ce lien avec `redirect_to` = `site_url`,
-c'est-à-dire la racine du front, et non `/auth/callback`. La personne
-atterrit donc sur l'accueil, déjà connectée, sans passer par l'écran qui lui
-demande un mot de passe : `AuthCallbackView` reconnaît bien `type=invite` et
-redirige vers `/definir-mot-de-passe`, mais elle n'est jamais atteinte. En
-attendant que `invite-user` et le script d'amorçage passent un `redirect_to`
-explicite, ouvrez http://127.0.0.1:5173/definir-mot-de-passe à la main après
-avoir suivi le lien. La même limite vaut pour toutes les invitations émises
-depuis l'écran d'administration.
+## Où atterrit un lien d'invitation
+
+Un lien d'invitation **doit** renvoyer sur `<SITE_URL>/auth/callback`. C'est
+la seule route qui lise le `type=invite` du lien et envoie la personne
+définir un mot de passe. Renvoyée ailleurs — à la racine du site, ce que fait
+GoTrue en l'absence de `redirect_to` explicite — elle arrive connectée, sans
+qu'on lui demande rien, et se retrouve enfermée dehors dès l'expiration de
+cette première session : aucun mot de passe n'aura jamais été défini, et
+c'est l'unique porte d'entrée du produit.
+
+C'est pourquoi `invite-user` et `npm run admin:bootstrap` passent tous deux
+un `redirect_to` explicite, construit à partir de `SITE_URL` :
+
+| Où | Variable | Source |
+|---|---|---|
+| Edge Functions | `SITE_URL` | `[edge_runtime.secrets]` dans `supabase/config.toml` en local ; `supabase secrets set` sur un environnement déployé |
+| `npm run admin:bootstrap` | `SITE_URL` | l'environnement, ou le `.env` de la racine |
+
+Ni l'un ni l'autre ne retombe silencieusement sur une valeur par défaut :
+sans la variable, `invite-user` répond `500 site_url_not_configured` sans
+rien écrire, et le script d'amorçage refuse de démarrer. Une retombée
+silencieuse réintroduirait le défaut ci-dessus dans tout environnement mal
+configuré, invisiblement, pour chaque personne invitée.
+
+`<SITE_URL>/auth/callback` doit aussi figurer dans
+`[auth] additional_redirect_urls`, sans quoi GoTrue refuse la redirection.
 
 ## Comptes de développement
 

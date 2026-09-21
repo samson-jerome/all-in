@@ -36,6 +36,44 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+// Browser-facing URL of the front. Not one of the three the CLI injects on
+// its own: it is declared in supabase/config.toml under
+// [edge_runtime.secrets], and set with `supabase secrets set` on a deployed
+// environment.
+const SITE_URL = Deno.env.get("SITE_URL");
+
+/**
+ * The only route that turns an invitation link into a usable account.
+ *
+ * AuthCallbackView reads `type` out of the link fragment and, for `invite`
+ * or `recovery`, sends the person to the password screen. It is mounted on
+ * this path and nowhere else. A link that lands anywhere else leaves the
+ * person signed in with no password ever set -- and, once that first session
+ * expires, with no way to sign in again.
+ */
+const AUTH_CALLBACK_PATH = "/auth/callback";
+
+/**
+ * Where an invitation link must send the person, or null if SITE_URL is not
+ * configured.
+ *
+ * There is deliberately no fallback. Calling inviteUserByEmail without a
+ * `redirectTo` is not a neutral default: GoTrue then uses its own
+ * `site_url`, the front's root, which is precisely the defect this function
+ * exists to prevent. A fallback would reintroduce it, silently, in any
+ * environment where someone forgot to set the variable -- invitations would
+ * still be sent, and every single person invited under that configuration
+ * would end up locked out. Refusing the request costs one loud failure on a
+ * misconfigured deployment instead.
+ *
+ * The URL built here must also appear in `[auth] additional_redirect_urls`,
+ * or GoTrue refuses the redirection.
+ */
+export function inviteRedirectTo(): string | null {
+  if (!SITE_URL) return null;
+  return `${SITE_URL.replace(/\/+$/, "")}${AUTH_CALLBACK_PATH}`;
+}
+
 /** Bypasses RLS. Only ever used after the caller has been proven to be an admin. */
 export function adminClient(): SupabaseClient {
   return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {

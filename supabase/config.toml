@@ -401,8 +401,22 @@ inspector_port = 8083
 # The Deno major version to use.
 deno_version = 2
 
-# [edge_runtime.secrets]
-# secret_key = "env(SECRET_VALUE)"
+[edge_runtime.secrets]
+# URL du front, côté navigateur. `invite-user` en a besoin pour construire la
+# cible de redirection du lien d'invitation (<SITE_URL>/auth/callback) : une
+# Edge Function n'a aucun autre moyen de connaître l'URL publique du front,
+# et GoTrue, sans `redirect_to` explicite, renvoie sur `site_url` — la racine
+# — où l'écran qui réclame un mot de passe n'est jamais monté.
+#
+# La valeur doit rester cohérente avec `[auth] site_url` ci-dessus, et
+# `<SITE_URL>/auth/callback` doit figurer dans `additional_redirect_urls`,
+# sans quoi GoTrue refusera la redirection.
+#
+# Elle est écrite en clair ici comme l'est déjà `[auth] site_url` : ce n'est
+# pas un secret, et une substitution `env(...)` casserait `npm run db:start`
+# pour qui n'a pas encore de `.env`. Sur un environnement déployé, elle se
+# pose avec `supabase secrets set SITE_URL=https://…`.
+SITE_URL = "http://127.0.0.1:5173"
 
 [analytics]
 enabled = true

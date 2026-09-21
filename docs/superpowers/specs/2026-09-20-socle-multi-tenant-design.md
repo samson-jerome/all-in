@@ -129,6 +129,46 @@ comme trois portes distinctes :
 - `npm run fn:check` (`deno check`) — les Edge Functions, que ni `vue-tsc` ni
   Vitest n'atteignent, et qui portent tout le code d'autorisation du produit.
 
+### A-7 — Un lien d'invitation doit désigner explicitement `/auth/callback` (2026-09-21)
+
+**Ce qui change.** La section 6 dit de l'invité qu'il « reçoit un lien,
+définit son mot de passe et se connecte ». C'est le comportement voulu, mais
+il n'était pas celui du produit : `inviteUserByEmail(email)` était appelée
+sans `redirectTo`, et GoTrue renvoie alors sur son propre `site_url`,
+c'est-à-dire la racine du front. `AuthCallbackView` — la seule vue qui lise
+le `type=invite` du lien et envoie à l'écran de mot de passe — n'est montée
+que sur `/auth/callback` et n'était donc jamais atteinte. **Mesuré dans un
+navigateur** : la personne atterrissait sur l'accueil, connectée, sans qu'on
+lui demande rien, et sans mot de passe défini elle ne pouvait plus se
+connecter une fois cette première session expirée. C'était la seule porte
+d'entrée du produit.
+
+Deux corrections, toutes deux vérifiées dans un navigateur :
+
+1. `invite-user` et `supabase/scripts/bootstrap_admin.sh` construisent une
+   cible explicite, `<SITE_URL>/auth/callback`. **`SITE_URL` devient une
+   variable de configuration obligatoire** — posée par
+   `[edge_runtime.secrets]` dans `supabase/config.toml` pour les Edge
+   Functions, et par l'environnement pour le script. Aucune valeur par
+   défaut : sans elle, `invite-user` répond `500 site_url_not_configured`
+   sans rien écrire, et le script refuse de démarrer. Une retombée
+   silencieuse sur `site_url` réintroduirait exactement ce défaut, sans
+   bruit, dans tout environnement mal configuré.
+2. Atteindre `/auth/callback` ne suffisait pas. Le client Supabase est créé
+   avec `detectSessionInUrl: true` et `main.ts` attend `init()` du store
+   avant même d'installer le routeur : quand le `onMounted` de la vue
+   s'exécute, supabase-js a déjà consommé le fragment et l'a effacé par
+   `history.replaceState`. Lire `window.location.hash` depuis la vue
+   renvoyait donc toujours `null`. Le type du lien est désormais capturé dans
+   `web/src/lib/supabase.ts`, sur la ligne qui précède `createClient` — le
+   dernier instant où il est encore observable, et un ordre garanti par la
+   structure plutôt que par une convention d'import.
+
+**Conséquence pour la section 7.** « `VITE_SUPABASE_URL` et
+`VITE_SUPABASE_ANON_KEY` uniquement » reste vrai du front. Les Edge
+Functions, elles, ont désormais une quatrième variable en plus des trois que
+la CLI injecte.
+
 ## 1. Contexte
 
 L'objectif produit est une application de gestion de tickets multi-tenant, accessible
@@ -407,6 +447,10 @@ qui a le droit, seulement à exécuter ce qui a déjà été autorisé.
 **Client externe, par mot de passe.** L'administrateur saisit une adresse et une
 organisation. `invite-user` insère l'invitation `pending`, **puis** appelle
 `inviteUserByEmail()`.
+
+> **A-7** — cet appel porte obligatoirement un `redirectTo` désignant
+> `<SITE_URL>/auth/callback` ; sans lui, l'invité n'est jamais amené à
+> définir un mot de passe.
 
 L'ordre n'est pas négociable : cet appel crée immédiatement la ligne dans `auth.users`,
 ce qui déclenche `handle_new_user`, qui cherche l'invitation. Invitation insérée après,

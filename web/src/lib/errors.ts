@@ -17,6 +17,11 @@ const MESSAGES: Record<string, string> = {
   invalid_invitation_id: "L'identifiant de l'invitation est invalide.",
   forbidden: "Accès refusé.",
   unauthorized: "Votre session a expiré, reconnectez-vous.",
+  // Configuration fault, not user error: deliberately not folded into the
+  // generic message, which would leave an administrator retrying an
+  // invitation that cannot work until SITE_URL is set on the environment.
+  site_url_not_configured:
+    "L'URL du site n'est pas configurée sur cet environnement : l'invitation n'a pas été envoyée.",
 };
 
 /**

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { supabase } from "@/lib/supabase";
+import { authLinkType, supabase } from "@/lib/supabase";
 import { useSessionStore } from "@/stores/session";
 
 const router = useRouter();
@@ -12,8 +12,10 @@ onMounted(async () => {
   if (!data.session) return void router.replace({ name: "login" });
 
   // An invite or recovery link lands here with no usable password yet.
-  const type = new URLSearchParams(window.location.hash.slice(1)).get("type");
-  if (type === "invite" || type === "recovery") {
+  // authLinkType is a snapshot taken before the Supabase client consumed the
+  // fragment; re-reading window.location.hash here would always find it
+  // already cleared (see @/lib/supabase).
+  if (authLinkType === "invite" || authLinkType === "recovery") {
     return void router.replace({ name: "set-password" });
   }
 
