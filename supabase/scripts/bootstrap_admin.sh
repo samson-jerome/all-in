@@ -108,13 +108,73 @@ echo "Amorçage de l'administrateur $EMAIL"
 echo "  retour     : $REDIRECT_TO"
 
 # --- 1. L'invitation ---------------------------------------------------------
+mail_sent=non
+invitation_id=""
+http_body_file=""
+
+# Le filet, posé avant la moindre écriture. La règle tient en une phrase :
+# une ligne que *ce script* vient d'insérer ne survit que si l'e-mail
+# d'invitation est réellement parti. Sinon elle n'a plus aucun consommateur —
+# le trigger public.handle_new_user() ne se déclenche qu'à la création du
+# compte — et elle nuit activement : l'index unique sur les invitations
+# `pending` ferait échouer en 409 la tentative suivante, y compris celle,
+# légitime, passée par l'écran d'administration.
+#
+# C'est exactement ce que fait l'Edge Function invite-user après un
+# inviteUserByEmail en échec (« Leave no ghost row that would silently attach
+# a future signup »), et par le même moyen : une suppression par identifiant,
+# donc de cette ligne-là et d'aucune autre.
+#
+# La condition `-n "$invitation_id"` n'est pas une précaution de style : si
+# l'invitation `pending` préexistait — posée par quelqu'un d'autre, ou par un
+# amorçage précédent — l'insertion de bootstrap_admin.sql ne s'est pas faite,
+# `returning id` n'a rien rendu, et ce script n'a rien à retirer.
+#
+# Le trap couvre toutes les sorties, y compris celles que `set -e` provoque
+# sans passer par un `exit` explicite. Mesuré : bash restitue le code de
+# sortie d'origine une fois le trap terminé, même si une commande y échoue.
+cleanup() {
+  [ -z "$http_body_file" ] || rm -f "$http_body_file"
+
+  [ "$mail_sent" = non ] || return 0
+  [ -n "$invitation_id" ] || return 0
+
+  if psql "$DATABASE_URL" \
+      --quiet --tuples-only --no-align \
+      --set=ON_ERROR_STOP=1 \
+      --set=id="$invitation_id" \
+      --file - >/dev/null 2>&1 <<'SQL'
+delete from public.invitations
+ where id = :'id'::uuid
+   and status = 'pending';
+SQL
+  then
+    echo "  invitation : retirée, l'e-mail n'étant pas parti" >&2
+  else
+    # Même information que le `orphaned_invitation_id` d'invite-user : si le
+    # retrait échoue, l'opérateur doit savoir quelle ligne nettoyer à la main.
+    echo "  invitation : retrait impossible, ligne $invitation_id laissée en attente" >&2
+  fi
+}
+trap cleanup EXIT
+
 # ON_ERROR_STOP : sans lui, psql signale l'erreur et sort quand même en 0.
-psql "$DATABASE_URL" \
-  --quiet \
-  --set=ON_ERROR_STOP=1 \
-  --set=email="$EMAIL" \
-  --file "$SQL_FILE"
-echo "  invitation : posée si elle manquait (l'insertion est conditionnelle)"
+invitation_id="$(
+  psql "$DATABASE_URL" \
+    --quiet --tuples-only --no-align \
+    --set=ON_ERROR_STOP=1 \
+    --set=email="$EMAIL" \
+    --file "$SQL_FILE"
+)"
+
+# Les deux `not exists` du SQL couvrent deux situations distinctes : une
+# invitation déjà en attente, ou un compte déjà rattaché à un profil. Ni l'une
+# ni l'autre n'appelle une insertion, et le message ne prétend pas trancher.
+if [ -n "$invitation_id" ]; then
+  echo "  invitation : posée"
+else
+  echo "  invitation : rien à poser (déjà en attente, ou compte déjà rattaché)"
+fi
 
 # Relevé avant l'appel : GoTrue répond 200 aussi bien pour un compte qu'il
 # vient de créer que pour un compte invité dont l'invitation n'a pas encore
@@ -143,9 +203,7 @@ SQL
 # --- 2. Le compte ------------------------------------------------------------
 # La clé service_role ne doit jamais être affichée : ni ici, ni dans une trace
 # d'erreur de curl. --silent --show-error limite curl à son message.
-mail_sent=non
 http_body_file="$(mktemp)"
-trap 'rm -f "$http_body_file"' EXIT
 
 # Le contrôle de forme plus haut accepte le guillemet et l'antislash : le
 # corps JSON doit donc être construit, pas interpolé. L'adresse ne peut en
@@ -241,15 +299,17 @@ if [ -z "$role" ]; then
     # GoTrue a répondu 422 email_exists : un compte existe déjà pour cette
     # adresse et il est déjà accepté, mais il n'a pas de profil. Comme
     # l'invitation a été refusée, invited_at n'a pas bougé, donc le trigger
-    # ne s'est pas déclenché — ce n'est pas lui qu'il faut incriminer. Et
-    # l'invitation posée à l'étape 1 reste en attente, sans rien pour la
-    # consommer.
+    # ne s'est pas déclenché — ce n'est pas lui qu'il faut incriminer.
+    #
+    # L'invitation que l'étape 1 aurait posée est retirée par cleanup() : le
+    # message peut donc renvoyer vers invite-user sans réserve, la voie est
+    # libre. Une version antérieure signalait ici une ligne restée en attente,
+    # qui était précisément celle qui aurait bloqué ce conseil en 409.
     echo "Un compte existe déjà pour cette adresse et il a déjà été accepté, mais il" >&2
     echo "ne porte aucun profil. GoTrue a donc refusé l'invitation (422 email_exists)" >&2
     echo "sans toucher à invited_at, et le trigger public.handle_new_user() n'avait" >&2
     echo "aucune raison de se déclencher." >&2
     echo "" >&2
-    echo "L'invitation posée à l'étape 1 reste en attente et rien ne la consommera." >&2
     echo "C'est exactement le cas que l'Edge Function invite-user sait traiter, en" >&2
     echo "rattachant le profil directement : invitez cette adresse depuis l'écran" >&2
     echo "d'administration, ou supprimez le compte pour réamorcer depuis zéro." >&2
