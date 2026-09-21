@@ -34,7 +34,14 @@ const showErrorPanel = computed(
     <header v-if="session.status === 'ready'"
             class="flex items-center gap-6 border-b border-slate-200 bg-white px-6 py-3">
       <RouterLink :to="{ name: 'home' }" class="font-semibold">allin</RouterLink>
-      <!-- Navigation links arrive with the screens they point to, in task 12. -->
+      <nav class="flex gap-4 text-sm">
+        <RouterLink :to="{ name: 'account' }">Mon compte</RouterLink>
+        <template v-if="session.isAdmin">
+          <RouterLink :to="{ name: 'admin-organizations' }">Organisations</RouterLink>
+          <RouterLink :to="{ name: 'admin-users' }">Utilisateurs</RouterLink>
+          <RouterLink :to="{ name: 'admin-invitations' }">Invitations</RouterLink>
+        </template>
+      </nav>
       <button class="ml-auto text-sm underline" @click="signOut">Se déconnecter</button>
     </header>
     <main class="mx-auto max-w-4xl p-6">
