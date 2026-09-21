@@ -157,8 +157,13 @@ async function removeFromPortfolio(agentId: string, orgId: string) {
   await load();
 }
 
+// An agent's portfolio row, which is plain text rather than a picker. It gets
+// the same marking as the client picker: a deactivated organisation is still
+// a real, recorded assignment, and it now grants nothing. Marking one place
+// and not the other would be worse than marking neither.
 function organizationName(id: string) {
-  return organizations.value.find((organization) => organization.id === id)?.name ?? id;
+  const organization = organizations.value.find((candidate) => candidate.id === id);
+  return organization ? optionLabel(organization) : id;
 }
 
 onMounted(load);
