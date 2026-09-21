@@ -4,6 +4,131 @@
 - **Projet** : allin — gestion de tickets (développement et incidents)
 - **Statut** : validé, prêt pour la rédaction du plan d'implémentation
 
+## 0. Amendements
+
+Ce document a été validé le 2026-09-20, avant l'implémentation. Ce qui suit
+consigne les écarts entre la conception et le lot effectivement livré. Le
+corps du document n'est pas réécrit : chaque passage concerné renvoie à
+l'amendement qui le corrige, pour que le raisonnement d'origine reste lisible
+à côté de ce qui l'a remplacé. C'est cette trace qui servira au lot OAuth.
+
+### A-1 — L'OAuth des utilisateurs internes est reporté (2026-09-21)
+
+**Ce qui change.** La conception faisait arriver les agents et les
+administrateurs par Google ou GitHub, et les seuls clients externes par
+mot de passe. Le lot 1 ne livre aucun OAuth : tout le monde arrive par
+invitation e-mail et mot de passe, quel que soit le rôle. Aucun fournisseur
+externe n'est activé dans `supabase/config.toml`.
+
+**Pourquoi.** Décision de l'utilisateur, prise en cours de lot : créer les
+identifiants chez Google et GitHub est une dépendance externe (c'est le
+risque que la section 11 signalait) dont il n'a pas voulu faire porter le
+coût au socle. Ce n'est pas une contrainte technique, et le besoin reste
+entier : il fera l'objet d'un lot dédié.
+
+**Conséquences en cascade** — c'est là que ce report coûte plus qu'une ligne
+de configuration :
+
+1. `public.handle_new_user()` refusait un rôle interne dont le fournisseur
+   valait `email`, précisément pour empêcher un inscrit libre de s'emparer
+   d'une invitation d'agent. Sans OAuth, tout le monde arrive avec
+   `provider = 'email'` : la règle rejetait donc *toutes* les invitations
+   internes, et aucun profil d'agent ou d'administrateur n'était jamais créé.
+   La règle a été remplacée par « `invited_at` non nul », pour tous les rôles
+   (migration `20260921070000_invitation_only_arrival.sql`).
+2. Cette nouvelle règle ne tient que parce que l'inscription libre est fermée
+   (`[auth] enable_signup = false`) : c'est ce verrou qui garantit qu'aucune
+   ligne `auth.users` ne peut naître hors de l'API admin. L'équivalence
+   « `invited_at` non nul ⇒ arrivée légitime » tombe le jour où ce drapeau
+   rouvre — ce dont le lot OAuth aura besoin. La fonction porte cet
+   avertissement en commentaire ; il est à relire avant toute réouverture.
+3. Le cloisonnement du seed en a souffert sans qu'on le voie : `seed.sql`
+   écrivait `provider = 'google'` sur les comptes internes, reproduisant
+   l'hypothèse de conception au lieu du comportement réel du produit, ce qui
+   masquait le défaut ci-dessus. Il pose désormais `provider = 'email'`
+   partout.
+
+### A-2 — `invite-user` appelle `inviteUserByEmail` pour tous les rôles (2026-09-21)
+
+**Ce qui change.** La règle « `invite-user` n'appelle pas `inviteUserByEmail`
+pour un rôle interne » (section 6, « Agent ou administrateur, par OAuth ») est
+supprimée. La fonction envoie l'invitation pour les trois rôles.
+
+**Pourquoi.** Conséquence directe de A-1. Cette règle existait pour ne pas
+créer un compte par mot de passe parasite à quelqu'un qui se connecterait par
+Google. Sans OAuth, la ligne `auth.users` d'un interne n'a plus aucune autre
+façon de naître : ne pas appeler `inviteUserByEmail` laissait l'invitation
+`pending` indéfiniment.
+
+### A-3 — `revoke-invitation` retire l'accès, il ne révoque plus une invitation en attente (2026-09-21)
+
+**Ce qui change.** Le contrat de la section 6 — « passe une invitation
+`pending` en `revoked` » — ne décrit plus la fonction. Elle marque
+l'invitation `revoked` **et**, si le compte que cette invitation a créé
+existe, désactive son profil et révoque ses sessions.
+
+**Pourquoi.** Conséquence de A-2. Depuis que `invite-user` résout chaque
+invitation immédiatement (acceptée par le trigger, écrite acceptée sur la
+branche « compte existant », ou supprimée en cas d'échec d'envoi), plus aucun
+chemin produit ne laisse une invitation `pending`. Le filtre
+`.eq("status", "pending")` ne pouvait donc plus rien apparier : l'endpoint
+répondait `404` à chaque appel. La capacité qu'un administrateur attend
+derrière ce bouton — « annulez cette invitation, cette personne ne doit pas
+entrer » — reste légitime ; sous le nouveau modèle, elle signifie retirer
+l'accès. L'ordre des deux écritures n'est pas négociable : l'accès est retiré
+avant que l'invitation ne soit marquée, pour qu'un échec partiel laisse
+« accès déjà retiré, invitation encore acceptée » et jamais l'inverse.
+
+### A-4 — L'amorçage est un script, et il crée le compte (2026-09-21)
+
+**Ce qui change.** La section 4 prévoyait « une migration de seed » posant une
+invitation `pending`, la première connexion OAuth créant le profil. Le lot
+livre `supabase/scripts/bootstrap_admin.sh` (avec son `.sql`), lancé par
+`npm run admin:bootstrap`, qui pose l'invitation **puis crée le compte** par
+l'API admin de GoTrue.
+
+**Pourquoi.** Deux raisons distinctes. D'abord, une migration qui lit une
+variable d'environnement n'est pas reproductible : rejouée ailleurs, elle ne
+produit pas le même schéma. Ensuite, et c'est la conséquence de A-1 : sans
+OAuth et avec `enable_signup = false`, *personne* ne peut créer le compte du
+premier administrateur. Poser l'invitation ne suffit plus. L'API admin est la
+seule voie restante, parce qu'elle s'authentifie avec la clé `service_role` et
+échappe au verrou d'inscription.
+
+### A-5 — Écarts mineurs relevés à l'implémentation (2026-09-21)
+
+- **`invitations.email` est de type `text`**, avec une contrainte
+  `check (email = lower(trim(email)))`, et non `citext` : l'extension n'ajoute
+  rien dès lors que la normalisation est garantie à l'écriture, et le
+  rapprochement se fait partout sur `lower(trim(...))`.
+- **Le trigger `on_auth_user_created` est `after insert or update of
+  invited_at`**, et non `after insert` seul. GoTrue insère la ligne
+  `auth.users` avec `invited_at` encore nul, puis le renseigne par un UPDATE
+  séparé : un trigger `after insert` seul voyait toujours `invited_at IS NULL`
+  et ne rattachait jamais personne. La fonction porte de ce fait une garde
+  d'idempotence, puisqu'elle peut se déclencher deux fois pour le même
+  utilisateur.
+- **La suite Vitest dépasse les « trois tests » de la section 8** : elle
+  couvre aussi la validation d'entrée avec un appelant administrateur (sans
+  quoi un `requireAdmin` qui refuserait tout le monde passerait les trois
+  tests d'origine), l'envoi effectif d'une invitation interne, le retrait
+  d'accès de bout en bout, et le coalescing du store de session.
+
+### A-6 — Les critères de fin sont réécrits (2026-09-21)
+
+Les critères 4 et 8 de la section 10 mentionnent une connexion OAuth ; ils
+sont à lire « par invitation e-mail » (A-1). Le critère 9, « le front compile
+sans erreur TypeScript », s'est révélé insuffisant : la porte employée,
+`vue-tsc --noEmit`, ne type-vérifie aucun fichier, parce que
+`web/tsconfig.json` est un fichier de solution (`"files": []` + références).
+Elle a laissé passer une construction cassée. Le critère 9 se lit désormais
+comme trois portes distinctes :
+
+- `npm run typecheck` (`vue-tsc -b`) — le front **et** ses tests ;
+- `npm run build` — le front se construit réellement ;
+- `npm run fn:check` (`deno check`) — les Edge Functions, que ni `vue-tsc` ni
+  Vitest n'atteignent, et qui portent tout le code d'autorisation du produit.
+
 ## 1. Contexte
 
 L'objectif produit est une application de gestion de tickets multi-tenant, accessible
@@ -45,7 +170,7 @@ hiérarchie d'organisations, suppression de données, direction graphique.
 |---|---|
 | Tenancy | Un client appartient à une organisation ; un agent en couvre plusieurs ; un admin voit tout |
 | Rôles | `client`, `agent`, `admin` |
-| Authentification | E-mail et mot de passe pour les clients externes ; OAuth (Google ou GitHub) pour les agents et admins |
+| Authentification | E-mail et mot de passe pour les clients externes ; OAuth (Google ou GitHub) pour les agents et admins — *voir A-1 : l'OAuth est reporté, tous les rôles arrivent par mot de passe* |
 | Entrée dans le système | Sur invitation préalable uniquement ; aucune inscription libre |
 | Autorisation | Politiques RLS adossées à des fonctions SQL `security definer` |
 | Opérations privilégiées | Edge Functions en `service_role`, limitées au strict nécessaire |
@@ -145,6 +270,11 @@ internes arrivent par OAuth : ils ne cliquent aucun lien d'invitation et ne port
 donc aucune métadonnée. L'invitation est l'autorisation préalable, saisie par un
 administrateur, que le système consomme quel que soit le mode d'arrivée.
 
+> **A-1** — la prémisse est caduque : les internes cliquent désormais un lien
+> d'invitation comme tout le monde. La conclusion tient quand même, pour une
+> autre raison : l'invitation porte le rôle et l'organisation, que les
+> métadonnées d'un lien GoTrue ne portent pas.
+
 **Le portefeuille d'un agent ne se saisit pas à l'invitation.** L'administrateur invite
 l'agent, puis lui affecte ses organisations depuis l'écran d'administration.
 
@@ -153,6 +283,9 @@ l'agent, puis lui affecte ses organisations depuis l'écran d'administration.
 Un trigger `handle_new_user` sur `auth.users`, en `after insert`, cherche une invitation
 `pending` correspondant à l'adresse e-mail, en n'acceptant que les adresses vérifiées
 par le fournisseur d'identité.
+
+> **A-1 et A-5** — le trigger est `after insert or update of invited_at`, et
+> le test d'arrivée légitime est « `invited_at` non nul », pour tous les rôles.
 
 - Invitation trouvée : le profil est créé avec le rôle et l'organisation prévus, et
   l'invitation passe en `accepted` avec son horodatage.
@@ -166,6 +299,10 @@ Personne ne peut inviter le premier administrateur. Une migration de seed insèr
 invitation `pending` pour une adresse lue en variable d'environnement ; la première
 connexion avec cette adresse crée le profil administrateur. Le mécanisme est tracé
 dans le SQL, rejouable, et ne laisse aucun compte en dur.
+
+> **A-4** — c'est un script (`npm run admin:bootstrap`) et non une migration,
+> et il doit en outre créer le compte : personne ne peut plus le créer à sa
+> place.
 
 ## 5. Autorisation
 
@@ -250,7 +387,7 @@ colonnes sensibles de `profiles`.
 | Fonction | Rôle |
 |---|---|
 | `invite-user` | Crée une invitation et déclenche l'entrée dans le système ; sert aussi au renvoi |
-| `revoke-invitation` | Passe une invitation `pending` en `revoked` |
+| `revoke-invitation` | Passe une invitation `pending` en `revoked` — *voir A-3 : retire désormais l'accès* |
 | `admin-update-user` | Modifie le rôle, l'organisation ou l'état actif d'un profil |
 
 Le changement de rôle et la désactivation sont réunis dans une seule fonction : même
@@ -287,11 +424,20 @@ l'invite à se connecter avec son compte. À la première connexion, `auth.users
 le trigger consomme l'invitation, et le profil existe avant le premier rendu de
 l'application.
 
+> **A-2** — ce paragraphe entier est caduc : sans OAuth, un interne suit
+> exactement le parcours « client externe, par mot de passe » ci-dessus.
+
 Le rapprochement se fait sur l'adresse e-mail, d'où le type `citext` et la
 normalisation à l'écriture comme à la lecture.
 
 **Compte préexistant sans profil.** Une personne s'est connectée par OAuth sans
-invitation : compte créé, aucun profil, écran « compte non rattaché ». Si
+invitation : compte créé, aucun profil, écran « compte non rattaché ».
+
+> **A-1** — sans OAuth ni inscription libre, ce compte ne peut plus naître de
+> cette façon ; il naît d'une création directe par l'API admin ou par le
+> Studio (c'est la fixture `orphan@allin.test`). Le cas reste réel et la
+> parade est inchangée.
+ Si
 l'administrateur crée alors une invitation, `handle_new_user` ne se redéclenchera
 jamais, puisque l'utilisateur existe déjà — la personne resterait bloquée
 indéfiniment. `invite-user` cherche donc l'adresse dans `auth.users` avant toute chose :
@@ -366,7 +512,7 @@ TypeScript : une colonne renommée en base casse la compilation au lieu de produ
 
 ### Écrans du lot 1
 
-Connexion (mot de passe et boutons OAuth), retour OAuth, définition de mot de passe,
+Connexion (mot de passe ; les boutons OAuth sont hors périmètre, A-1), retour OAuth, définition de mot de passe,
 réinitialisation de mot de passe, compte non rattaché, 403, mon profil. Côté
 administration : organisations (liste, création, activation), utilisateurs (liste, rôle,
 activation, portefeuille des agents), invitations (liste, création, révocation). Plus un
@@ -463,6 +609,10 @@ Les commandes `supabase` se lancent à la racine du dépôt, les commandes `npm`
 
 ## 10. Critères de fin
 
+> **A-6** — les critères 4 et 8 se lisent « par invitation e-mail » et non
+> « par OAuth » ; le critère 9 se décompose en `npm run typecheck`,
+> `npm run build` et `npm run fn:check`.
+
 Le lot 1 est terminé lorsque :
 
 1. `supabase db reset` reconstruit l'environnement complet sans erreur.
@@ -484,6 +634,9 @@ Le lot 1 est terminé lorsque :
 **Identifiants OAuth.** Créer les identifiants chez Google ou GitHub et enregistrer les
 URL de redirection locales est une dépendance externe. À traiter au début du lot, sous
 peine de découvrir le blocage à la fin.
+
+> **A-1** — ce risque s'est matérialisé, et il a été traité en sortant l'OAuth
+> du lot. Il redevient le premier risque du lot OAuth.
 
 **E-mails en développement.** Les messages d'invitation partent dans le serveur de test
 intégré à `supabase start`. Il faut savoir où les lire avant de conclure à une panne
