@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { supabase } from "@/lib/supabase";
+import { useSessionStore } from "@/stores/session";
 
 const email = ref("");
 const password = ref("");
@@ -9,6 +10,7 @@ const message = ref("");
 const busy = ref(false);
 const route = useRoute();
 const router = useRouter();
+const session = useSessionStore();
 
 async function signInWithPassword() {
   busy.value = true;
@@ -17,11 +19,17 @@ async function signInWithPassword() {
     email: email.value.trim().toLowerCase(),
     password: password.value,
   });
-  busy.value = false;
   if (error) {
+    busy.value = false;
     message.value = "Adresse ou mot de passe incorrect.";
     return;
   }
+  // Settle the store before navigating: onAuthStateChange applies the new
+  // session asynchronously, and the guard decides on session.status -- without
+  // waiting here, the guard can still see the pre-login state and bounce
+  // back to this screen right after a correct password.
+  await session.sync();
+  busy.value = false;
   await router.push(String(route.query.redirect ?? "/"));
 }
 </script>

@@ -40,6 +40,17 @@ export const useSessionStore = defineStore("session", () => {
   const isAdmin = computed(() => role.value === "admin");
 
   let readyPromise: Promise<void> | null = null;
+  // Tracks an in-flight applySession call so a caller that needs to await
+  // settlement (sync(), below) and the onAuthStateChange listener firing for
+  // the same id don't each run their own profile load.
+  let pendingApply: { id: string | null; promise: Promise<void> } | null = null;
+
+  function setErrorState(err: unknown) {
+    profile.value = null;
+    agentOrgIds.value = [];
+    status.value = "error";
+    error.value = toSessionError(err);
+  }
 
   async function loadProfile(id: string) {
     error.value = null;
@@ -104,16 +115,27 @@ export const useSessionStore = defineStore("session", () => {
     status.value = "ready";
   }
 
-  async function applySession(id: string | null) {
-    userId.value = id;
-    if (!id) {
-      profile.value = null;
-      agentOrgIds.value = [];
-      error.value = null;
-      status.value = "anonymous";
-      return;
+  async function applySession(id: string | null): Promise<void> {
+    if (pendingApply && pendingApply.id === id) return pendingApply.promise;
+
+    const promise = (async () => {
+      userId.value = id;
+      if (!id) {
+        profile.value = null;
+        agentOrgIds.value = [];
+        error.value = null;
+        status.value = "anonymous";
+        return;
+      }
+      await loadProfile(id);
+    })();
+
+    pendingApply = { id, promise };
+    try {
+      await promise;
+    } finally {
+      if (pendingApply.promise === promise) pendingApply = null;
     }
-    await loadProfile(id);
   }
 
   function init(): Promise<void> {
@@ -134,10 +156,7 @@ export const useSessionStore = defineStore("session", () => {
         // every future guard check, and main.ts's top-level await would
         // never settle, leaving a blank page forever. Land on the terminal
         // 'error' state instead, same as a failed profile lookup.
-        profile.value = null;
-        agentOrgIds.value = [];
-        status.value = "error";
-        error.value = toSessionError(err);
+        setErrorState(err);
       }
     })();
 
@@ -148,9 +167,30 @@ export const useSessionStore = defineStore("session", () => {
     await init();
   }
 
+  /**
+   * Re-applies whichever user is currently authenticated and waits for the
+   * store to fully settle. A screen that itself just changed the auth state
+   * (signing in) calls this before navigating, instead of navigating on the
+   * strength of the auth call alone: onAuthStateChange updates the store
+   * asynchronously, so without this the guard can still observe the
+   * pre-action status and make the wrong call. Coalesced with applySession's
+   * own in-flight call for the same id, so the auth event firing around the
+   * same time does not trigger a second profile load.
+   */
+  async function sync(): Promise<void> {
+    try {
+      const { data } = await supabase.auth.getSession();
+      await applySession(data.session?.user.id ?? null);
+    } catch (err) {
+      setErrorState(err);
+    }
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
   }
 
-  return { status, userId, profile, agentOrgIds, error, role, isAdmin, init, whenReady, signOut };
+  return {
+    status, userId, profile, agentOrgIds, error, role, isAdmin, init, whenReady, sync, signOut,
+  };
 });
