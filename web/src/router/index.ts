@@ -30,7 +30,11 @@ export const router = createRouter({
       component: () => import("@/features/auth/ForbiddenView.vue") },
     // Unknown URL: send an anonymous visitor to login (not a blank page) and
     // an authenticated one home. Deliberately excluded from PUBLIC_ROUTES.
-    { path: "/:pathMatch(.*)*", redirect: { name: "home" } },
+    // vue-router carries the source route's params over to a named redirect
+    // target unless the target supplies its own -- without the explicit
+    // empty params here, the catch-all's own `pathMatch` param would be
+    // passed to "home", which doesn't declare one, and logs a warning.
+    { path: "/:pathMatch(.*)*", redirect: () => ({ name: "home", params: {} }) },
   ],
 });
 

@@ -3,12 +3,11 @@ import { ref } from "vue";
 import { supabase } from "@/lib/supabase";
 import { describeError } from "@/lib/errors";
 import { useSessionStore } from "@/stores/session";
+import { ROLE_LABELS } from "@/lib/roles";
 
 const session = useSessionStore();
 const fullName = ref(session.profile?.full_name ?? "");
 const message = ref("");
-
-const ROLE_LABELS = { client: "Client", agent: "Agent", admin: "Administrateur" } as const;
 
 async function save() {
   const { error } = await supabase

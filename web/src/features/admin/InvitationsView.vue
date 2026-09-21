@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { supabase } from "@/lib/supabase";
+import { describeError } from "@/lib/errors";
 import { callFunction } from "@/lib/functions";
+import { ROLE_LABELS } from "@/lib/roles";
 import type { Database } from "@/lib/database.types";
 
 type Invitation = Database["public"]["Tables"]["invitations"]["Row"];
 
-const ROLE_LABELS = { client: "Client", agent: "Agent", admin: "Administrateur" } as const;
 const STATUS_LABELS: Record<string, string> = {
   pending: "En attente",
   accepted: "Acceptée",
@@ -14,7 +15,12 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const invitations = ref<Invitation[]>([]);
-const organizations = ref<{ id: string; name: string }[]>([]);
+const organizations = ref<{ id: string; name: string; is_active: boolean }[]>([]);
+// A new invitation must only offer an organisation someone can actually be
+// attached to today.
+const activeOrganizations = computed(() =>
+  organizations.value.filter((organization) => organization.is_active),
+);
 const email = ref("");
 const role = ref<"client" | "agent" | "admin">("client");
 const orgId = ref("");
@@ -28,12 +34,22 @@ const notice = ref("");
 const selfEmail = ref<string | null>(null);
 
 async function load() {
-  const [{ data: rows }, { data: orgs }] = await Promise.all([
+  const [invitationsResult, orgsResult] = await Promise.all([
     supabase.from("invitations").select("*").order("created_at", { ascending: false }),
-    supabase.from("organizations").select("id, name").order("name"),
+    supabase.from("organizations").select("id, name, is_active").order("name"),
   ]);
-  invitations.value = rows ?? [];
-  organizations.value = orgs ?? [];
+
+  const error = invitationsResult.error ?? orgsResult.error;
+  if (error) {
+    // A denied or failed read must say so, not render an empty table: "no
+    // invitations" is a state the database does not actually have.
+    message.value = describeError(error);
+    return;
+  }
+
+  invitations.value = invitationsResult.data ?? [];
+  organizations.value = orgsResult.data ?? [];
+  message.value = "";
 }
 
 function isSelfInvitation(invitation: Invitation) {
@@ -107,7 +123,7 @@ onMounted(async () => {
       <select v-if="role === 'client'" v-model="orgId" required
               class="rounded border border-slate-300 px-3 py-2">
         <option value="">Organisation…</option>
-        <option v-for="organization in organizations" :key="organization.id"
+        <option v-for="organization in activeOrganizations" :key="organization.id"
                 :value="organization.id">{{ organization.name }}</option>
       </select>
       <button class="rounded bg-slate-900 px-3 py-2 text-white">Inviter</button>

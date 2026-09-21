@@ -12,8 +12,15 @@ const slug = ref("");
 const message = ref("");
 
 async function load() {
-  const { data } = await supabase.from("organizations").select("*").order("name");
+  const { data, error } = await supabase.from("organizations").select("*").order("name");
+  if (error) {
+    // A denied or failed read must say so, not render an empty table: "no
+    // organisations" is a state the database does not actually have.
+    message.value = describeError(error);
+    return;
+  }
   organizations.value = data ?? [];
+  message.value = "";
 }
 
 async function create() {
@@ -24,7 +31,6 @@ async function create() {
   if (error) return void (message.value = describeError(error));
   name.value = "";
   slug.value = "";
-  message.value = "";
   await load();
 }
 

@@ -13,10 +13,12 @@ type UserRow = {
   is_active: boolean;
 };
 
+type OrganizationOption = { id: string; name: string; is_active: boolean };
+
 const session = useSessionStore();
 
 const users = ref<UserRow[]>([]);
-const organizations = ref<{ id: string; name: string }[]>([]);
+const organizations = ref<OrganizationOption[]>([]);
 const portfolios = ref<Record<string, string[]>>({});
 const message = ref("");
 // Id of the user currently mid-way through "becoming a client": the role
@@ -26,31 +28,59 @@ const message = ref("");
 const pendingClientOrgFor = ref<string | null>(null);
 
 async function load() {
-  const [{ data: profiles }, { data: orgs }, { data: assignments }] = await Promise.all([
+  const [profilesResult, orgsResult, assignmentsResult] = await Promise.all([
     supabase.from("profiles").select("id, full_name, role, org_id, is_active").order("full_name"),
-    supabase.from("organizations").select("id, name").order("name"),
+    supabase.from("organizations").select("id, name, is_active").order("name"),
     supabase.from("agent_organizations").select("agent_id, org_id"),
   ]);
 
-  users.value = (profiles ?? []) as UserRow[];
-  organizations.value = orgs ?? [];
+  const error = profilesResult.error ?? orgsResult.error ?? assignmentsResult.error;
+  if (error) {
+    // A denied or failed read must say so, not render empty tables: "there
+    // are no users" is a state the database does not actually have.
+    message.value = describeError(error);
+    return;
+  }
+
+  users.value = (profilesResult.data ?? []) as UserRow[];
+  organizations.value = orgsResult.data ?? [];
 
   portfolios.value = {};
-  for (const row of assignments ?? []) {
+  for (const row of assignmentsResult.data ?? []) {
     (portfolios.value[row.agent_id] ??= []).push(row.org_id);
   }
+
+  message.value = "";
 }
 
-async function updateUser(user: UserRow, changes: Record<string, unknown>) {
+// Organisations offered in a picker: active only, plus the current value if
+// it happens to be one that has since been deactivated -- omitting it there
+// would misrepresent a real, still-effective assignment rather than just
+// hide an unrelated choice.
+function pickerOptions(currentOrgId?: string | null): OrganizationOption[] {
+  const active = organizations.value.filter((organization) => organization.is_active);
+  if (!currentOrgId || active.some((organization) => organization.id === currentOrgId)) {
+    return active;
+  }
+  const current = organizations.value.find((organization) => organization.id === currentOrgId);
+  return current ? [...active, current] : active;
+}
+
+async function updateUser(user: UserRow, changes: Record<string, unknown>): Promise<boolean> {
   const { message: error } = await callFunction("admin-update-user", {
     user_id: user.id,
     ...changes,
   });
   message.value = error;
-  if (!error) await load();
+  if (error) return false;
+  await load();
+  return true;
 }
 
-function onRoleChange(user: UserRow, newRole: string) {
+async function onRoleChange(user: UserRow, event: Event) {
+  const target = event.target as HTMLSelectElement;
+  const newRole = target.value;
+
   if (newRole === "client" && !user.org_id) {
     // Converting an internal user to a client needs an organisation, which
     // this dropdown alone cannot supply. Ask for it inline instead of
@@ -58,8 +88,9 @@ function onRoleChange(user: UserRow, newRole: string) {
     pendingClientOrgFor.value = user.id;
     return;
   }
+
   pendingClientOrgFor.value = null;
-  updateUser(user, {
+  const ok = await updateUser(user, {
     role: newRole,
     // A client keeps its current organisation; an internal role never
     // carries one. Sending the client's stale org_id alongside a new
@@ -67,6 +98,23 @@ function onRoleChange(user: UserRow, newRole: string) {
     // guard.
     org_id: newRole === "client" ? user.org_id : null,
   });
+
+  if (!ok) {
+    // This select is bound with a plain :value, so once the person picks an
+    // option the browser owns the displayed value until something patches
+    // it back. On success, load() replaces user.role and the normal render
+    // cycle updates it; on failure nothing about user.role changes, so
+    // nothing guarantees the control reverts on its own. Force it back to
+    // what the database still holds rather than leave an unsaved choice on
+    // screen.
+    target.value = user.role;
+  }
+}
+
+async function onOrgChange(user: UserRow, event: Event) {
+  const target = event.target as HTMLSelectElement;
+  const ok = await updateUser(user, { org_id: target.value });
+  if (!ok) target.value = user.org_id ?? "";
 }
 
 async function confirmClientRole(user: UserRow, orgId: string) {
@@ -122,7 +170,7 @@ onMounted(load);
             <select :value="pendingClientOrgFor === user.id ? 'client' : user.role"
                     :disabled="user.id === session.userId"
                     class="rounded border border-slate-300 px-2 py-1 disabled:opacity-50"
-                    @change="onRoleChange(user, ($event.target as HTMLSelectElement).value)">
+                    @change="onRoleChange(user, $event)">
               <option value="client">Client</option>
               <option value="agent">Agent</option>
               <option value="admin">Administrateur</option>
@@ -131,19 +179,17 @@ onMounted(load);
               <select class="rounded border border-slate-300 px-1 py-0.5"
                       @change="confirmClientRole(user, ($event.target as HTMLSelectElement).value)">
                 <option value="">Organisation…</option>
-                <option v-for="organization in organizations" :key="organization.id"
+                <option v-for="organization in pickerOptions()" :key="organization.id"
                         :value="organization.id">{{ organization.name }}</option>
               </select>
-              <button class="underline" @click="pendingClientOrgFor = null">annuler</button>
+              <button class="underline" @click="pendingClientOrgFor = null">Annuler</button>
             </div>
           </td>
           <td>
             <select v-if="user.role === 'client'" :value="user.org_id ?? ''"
                     class="rounded border border-slate-300 px-2 py-1"
-                    @change="updateUser(user, {
-                      org_id: ($event.target as HTMLSelectElement).value,
-                    })">
-              <option v-for="organization in organizations" :key="organization.id"
+                    @change="onOrgChange(user, $event)">
+              <option v-for="organization in pickerOptions(user.org_id)" :key="organization.id"
                       :value="organization.id">{{ organization.name }}</option>
             </select>
 
@@ -151,13 +197,13 @@ onMounted(load);
               <div v-for="orgId in portfolios[user.id] ?? []" :key="orgId">
                 {{ organizationName(orgId) }}
                 <button class="ml-2 underline" @click="removeFromPortfolio(user.id, orgId)">
-                  retirer
+                  Retirer
                 </button>
               </div>
               <select class="rounded border border-slate-300 px-2 py-1"
                       @change="addToPortfolio(user.id, ($event.target as HTMLSelectElement).value)">
                 <option value="">Ajouter une organisation…</option>
-                <option v-for="organization in organizations" :key="organization.id"
+                <option v-for="organization in pickerOptions()" :key="organization.id"
                         :value="organization.id">{{ organization.name }}</option>
               </select>
             </div>
