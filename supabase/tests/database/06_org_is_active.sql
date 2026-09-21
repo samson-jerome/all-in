@@ -8,6 +8,14 @@
 begin;
 select plan(8);
 
+-- Captured as postgres, before any role change, so RLS does not apply: this is
+-- the whole table. The administrator's assertion at the end compares against
+-- this rather than against a hard-coded 3. A literal would turn every
+-- environment where somebody has created an organisation from the admin
+-- screen into a false alarm -- which is the defect this suite closed in
+-- 04_rls_org_profiles.sql and has no business reintroducing here.
+select count(*)::int as organizations_total from public.organizations \gset
+
 -- Baseline, before the flag moves: whatever the other files assert, this file
 -- has to show the counts actually changing rather than asserting a small
 -- number that a coincidence could also produce.
@@ -51,7 +59,7 @@ set local request.jwt.claims = '{"sub":"a0000000-0000-0000-0000-000000000001","r
 set local role authenticated;
 select ok(not public.can_read_org('11111111-1111-1111-1111-111111111111'),
           'can_read_org est faux sur une organisation désactivée, même pour l''administrateur');
-select is((select count(*)::int from public.organizations), 3,
+select is((select count(*)::int from public.organizations), :organizations_total,
           'l''administrateur continue de voir une organisation désactivée, sans quoi il ne pourrait plus la réactiver');
 reset role;
 

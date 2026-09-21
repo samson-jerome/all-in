@@ -38,9 +38,17 @@ alter table public.invitations         force row level security;
 alter default privileges in schema public
   revoke all on tables from anon, authenticated;
 
--- Sequences and functions carry the same default. A future sequence handed to
--- anon would leak and let anyone burn identifiers; the function default is
--- what makes every new function executable by anon unless revoked, which the
--- helpers above each have to undo by hand today.
+-- Sequences carry the same default: a future sequence handed to anon would
+-- leak and let anyone burn identifiers.
+--
+-- Functions are deliberately NOT revoked here. The same default makes every
+-- new function executable by anon unless revoked -- which each helper above
+-- has to undo by hand today -- but closing it wholesale would also revoke
+-- EXECUTE from `authenticated` on every future function, including the
+-- helpers the policies call, and every one of them would then need an
+-- explicit grant. That is a trade worth making deliberately, not as a
+-- side effect of this migration. Measured after this migration:
+-- pg_default_acl still shows `f | postgres | {anon=X, authenticated=X}`
+-- for schema public.
 alter default privileges in schema public
   revoke all on sequences from anon, authenticated;

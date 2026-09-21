@@ -10,6 +10,7 @@ select plan(16);
 -- branch (an admin carries a null org_id, so can_read_org() alone leaves them
 -- with their own row), and never fails over a row somebody legitimately added.
 select count(*)::int as profiles_total from public.profiles \gset
+select count(*)::int as organizations_total from public.organizations \gset
 
 -- Client A1: one organization, and the profiles of that organization.
 set local request.jwt.claims = '{"sub":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}';
@@ -70,7 +71,7 @@ reset role;
 -- Administrator: everything, except deletion.
 set local request.jwt.claims = '{"sub":"a0000000-0000-0000-0000-000000000001","role":"authenticated"}';
 set local role authenticated;
-select is((select count(*)::int from public.organizations), 3,
+select is((select count(*)::int from public.organizations), :organizations_total,
           'l''administrateur voit toutes les organisations');
 
 update public.organizations set name = 'Acme SA'
