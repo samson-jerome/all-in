@@ -44,7 +44,7 @@ reset role;
 set local request.jwt.claims = '{"sub":"a0000000-0000-0000-0000-000000000001","role":"authenticated"}';
 set local role authenticated;
 
-select is((select count(*)::int from public.invitations), 7,
+select is((select count(*)::int from public.invitations), 8,
           'l''administrateur voit toutes les invitations');
 select lives_ok(
   $$insert into public.agent_organizations (agent_id, org_id)

@@ -8,6 +8,7 @@ insert into public.organizations (id, name, slug) values
 
 insert into public.invitations (email, role, org_id) values
   ('admin@allin.test',    'admin',  null),
+  ('inactiveadmin@allin.test', 'admin', null),
   ('agent1@allin.test',   'agent',  null),
   ('agent2@allin.test',   'agent',  null),
   ('clienta1@allin.test', 'client', '11111111-1111-1111-1111-111111111111'),
@@ -40,6 +41,7 @@ select
   now(), now()
 from (values
   ('a0000000-0000-0000-0000-000000000001'::uuid, 'admin@allin.test',    'google', 'Awa Diallo'),
+  ('a0000000-0000-0000-0000-000000000002'::uuid, 'inactiveadmin@allin.test', 'google', 'Iris Fontaine'),
   ('b0000000-0000-0000-0000-000000000001'::uuid, 'agent1@allin.test',   'google', 'Bruno Lemoine'),
   ('b0000000-0000-0000-0000-000000000002'::uuid, 'agent2@allin.test',   'google', 'Bianca Rossi'),
   ('c0000000-0000-0000-0000-000000000001'::uuid, 'clienta1@allin.test', 'email',  'Chloé Marchand'),
@@ -66,6 +68,14 @@ where u.email like '%@allin.test';
 -- has no invitation at all, so the trigger never gives it a profile.
 update public.profiles set is_active = false
  where id = 'c0000000-0000-0000-0000-000000000004';
+
+-- inactiveadmin@allin.test is likewise deactivated after the fact, but with
+-- role admin instead of client: it is the fixture that proves auth_role()'s
+-- is_active predicate also protects the admin branch, not just non-admin
+-- roles. Without it, a deactivated administrator whose role still resolved
+-- to 'admin' would keep every privilege the role grants.
+update public.profiles set is_active = false
+ where id = 'a0000000-0000-0000-0000-000000000002';
 
 insert into public.agent_organizations (agent_id, org_id) values
   ('b0000000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111'),

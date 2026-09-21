@@ -74,7 +74,7 @@ select lives_ok(
   $$insert into public.organizations (name, slug) values ('Delta', 'delta')$$,
   'l''administrateur peut créer une organisation'
 );
-select is((select count(*)::int from public.profiles), 7,
+select is((select count(*)::int from public.profiles), 8,
           'l''administrateur voit tous les profils');
 
 prepare admin_deletes_org as
