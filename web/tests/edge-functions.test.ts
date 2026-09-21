@@ -215,6 +215,49 @@ describe("contrôle d'accès des Edge Functions", () => {
         .eq("id", invitationId)
         .single();
       expect(invitation?.status).toBe("revoked");
+
+      // Idempotence: a second call on this same, now-revoked invitation
+      // must not error -- a double click, or a retry after a lost
+      // response, has to land on the same safe state instead.
+      const secondRevoke = await call("revoke-invitation", tokens[ADMIN_EMAIL], {
+        invitation_id: invitationId,
+      });
+      const secondBody = await secondRevoke.json();
+      expect(secondRevoke.status).toBe(200);
+      expect(secondBody.status).toBe("already_revoked");
+      expect(secondBody.invitation_id).toBe(invitationId);
+    });
+
+    // Guard coverage, not a feature: an administrator must not be able to
+    // withdraw their own access through this endpoint. Uses the seeded
+    // admin@allin.test invitation directly -- nothing is created here, so
+    // there is nothing for the afterAll above to clean up.
+    it("refuse qu'un administrateur retire son propre accès, sans rien modifier", async () => {
+      const { data: adminAccount } = await admin
+        .rpc("admin_find_user_by_email", { p_email: ADMIN_EMAIL })
+        .maybeSingle();
+      const { data: adminInvitation } = await admin
+        .from("invitations")
+        .select("id")
+        .eq("email", ADMIN_EMAIL)
+        .single();
+
+      const response = await call("revoke-invitation", tokens[ADMIN_EMAIL], {
+        invitation_id: adminInvitation?.id,
+      });
+      const body = await response.json();
+      expect(response.status).toBe(400);
+      expect(body.error).toBe("cannot_modify_self");
+
+      // A regression that performs the withdrawal before refusing the
+      // request must be caught here -- not hidden behind the status
+      // assertion alone.
+      const { data: profile } = await admin
+        .from("profiles")
+        .select("is_active")
+        .eq("id", adminAccount?.user_id)
+        .single();
+      expect(profile?.is_active).toBe(true);
     });
   });
 });

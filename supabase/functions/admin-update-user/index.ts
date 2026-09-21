@@ -79,6 +79,16 @@ Deno.serve(async (req) => {
   // A deactivation (is_active: false) is applied separately below through
   // deactivateAccount(), shared with revoke-invitation. Reactivation and any
   // other is_active value still go through this same combined update.
+  //
+  // This means a role/org_id change combined with a deactivation is no
+  // longer written in one statement: the combined update below commits
+  // role/org_id first, then deactivateAccount() writes is_active in a
+  // second statement. A failure of that second write would leave
+  // role/org_id changed with is_active still true -- a state the old
+  // single-statement path could not produce. Accepted as unreachable in
+  // practice: same row, same service_role connection, and no constraint on
+  // public.profiles involves is_active alone, so nothing plausible fails
+  // between the two writes.
   if (body?.is_active !== undefined && body.is_active !== false) {
     update.is_active = body.is_active;
   }
