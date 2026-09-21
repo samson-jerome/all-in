@@ -26,9 +26,14 @@ Deno.serve(async (req) => {
 
   const admin = adminClient();
 
-  // An account may already exist without a profile: someone signed in through
-  // OAuth before being invited. The insert trigger will never fire again for
-  // them, so attach them directly instead of leaving a pending invitation.
+  // An account may already exist without a profile even though free
+  // registration is closed: it can have been created outside this endpoint
+  // entirely, directly through the admin API or the Studio (see the
+  // orphan@allin.test fixture), with no invitation ever pending for it. The
+  // trigger only fires on insert or on the update that sets invited_at, so
+  // inserting an invitation now would never cause it to fire again for this
+  // user -- attach the profile directly instead of leaving a pending
+  // invitation nothing will ever consume.
   const { data: existing, error: lookupError } = await admin
     .rpc("admin_find_user_by_email", { p_email: email })
     .maybeSingle();
@@ -44,7 +49,10 @@ Deno.serve(async (req) => {
   if (existing?.user_id) {
     // Free registration is closed, so an account with no profile can only
     // be one our own invitation flow created earlier -- there is no other
-    // route left to distinguish.
+    // route left to distinguish. This insert applies no arrival check of its
+    // own: it depends entirely on that flag staying closed, exactly like
+    // public.handle_new_user(). Re-read that function's warning comment
+    // before ever reopening [auth] enable_signup.
     const { error: profileError } = await admin.from("profiles").insert({
       id: existing.user_id,
       full_name: email.split("@")[0],

@@ -1,4 +1,6 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { execSync } from "node:child_process";
+import { createClient } from "@supabase/supabase-js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const BASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -39,14 +41,14 @@ async function signIn(email: string): Promise<string> {
   return body.access_token;
 }
 
-function call(name: string, token: string | null) {
+function call(name: string, token: string | null, body: Record<string, unknown> = {}) {
   return fetch(`${BASE_URL}/functions/v1/${name}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({}),
+    body: JSON.stringify(body),
   });
 }
 
@@ -94,4 +96,52 @@ describe("contrôle d'accès des Edge Functions", () => {
       expect(body.error).toBe(validationErrorCode);
     });
   }
+
+  // Regression test for task 13a: invite-user's internal-role branch used
+  // to return "invitation_pending" without ever calling inviteUserByEmail,
+  // on the assumption that an agent/admin's auth.users row would appear
+  // later through an OAuth login. OAuth is deferred out of this lot, so
+  // that branch never created an auth.users row and an internal invitation
+  // stayed pending forever -- nothing in the pgTAP suite or the rest of
+  // this file could catch it, since pgTAP only covers the trigger and the
+  // rest of this file only covers access control. This is the only
+  // automated check that an internal invitation is actually sent.
+  describe("invite-user, chemin interne", () => {
+    const email = `agent-fix13a-${Date.now()}@allin.test`;
+    let serviceRoleKey = "";
+
+    beforeAll(() => {
+      // Read from the CLI instead of being committed anywhere: this key
+      // exists only so the test below can delete the account it creates,
+      // never to bypass access control in the assertion itself, which goes
+      // through the same signed-in admin token as every other test above.
+      const output = execSync("npx supabase status -o env", { encoding: "utf-8" });
+      const match = output.match(/SERVICE_ROLE_KEY="([^"]+)"/);
+      if (!match) throw new Error("clé service_role introuvable dans `supabase status`");
+      serviceRoleKey = match[1];
+    });
+
+    afterAll(async () => {
+      // Runs even if the assertion below fails, so the suite stays
+      // re-runnable without a db:reset between runs.
+      if (!serviceRoleKey) return;
+      const admin = createClient(BASE_URL, serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { data: found } = await admin
+        .rpc("admin_find_user_by_email", { p_email: email })
+        .maybeSingle();
+      if (found?.user_id) {
+        await admin.auth.admin.deleteUser(found.user_id);
+      }
+      await admin.from("invitations").delete().eq("email", email);
+    });
+
+    it("envoie effectivement l'invitation à une nouvelle adresse interne", async () => {
+      const response = await call("invite-user", tokens[ADMIN_EMAIL], { email, role: "agent" });
+      const body = await response.json();
+      expect(response.status).toBe(200);
+      expect(body.status).toBe("invited");
+    });
+  });
 });

@@ -50,7 +50,7 @@ select is(
 );
 
 -- 3. No invitation, no profile.
-select pg_temp.new_auth_user('t2@allin.test', 'google', false, true) as t2_id \gset
+select pg_temp.new_auth_user('t2@allin.test', 'email', false, true) as t2_id \gset
 select is(
   (select count(*)::int from public.profiles where id = :'t2_id'),
   0, 'sans invitation, aucun profil n''est créé'

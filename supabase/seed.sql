@@ -34,7 +34,7 @@ select
   v.id, 'authenticated', 'authenticated', v.email,
   crypt('password123', gen_salt('bf')),
   now(),
-  case when v.provider = 'email' then now() end,
+  now(), -- every fixture arrives through an admin invite, so invited_at is always set
   jsonb_build_object('provider', v.provider, 'providers', jsonb_build_array(v.provider)),
   jsonb_build_object('full_name', v.full_name),
   '', '', '', '',
