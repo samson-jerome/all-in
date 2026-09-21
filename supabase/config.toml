@@ -208,7 +208,11 @@ enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts
 enable_manual_linking = false
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
-minimum_password_length = 6
+# 8, pour s'accorder avec le `minlength="8"` de SetPasswordView.vue. Les deux
+# valaient 6 et 8 : le navigateur refusait à 7 caractères, GoTrue les aurait
+# acceptés, et la règle réellement appliquée dépendait donc de qui posait la
+# question. C'est l'écran d'accueil du produit, sa seule porte d'entrée.
+minimum_password_length = 8
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
 password_requirements = ""
@@ -225,7 +229,14 @@ password_requirements = ""
 
 [auth.rate_limit]
 # Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
-email_sent = 2
+# 30, et non le 2 par défaut de la CLI. Ce produit n'envoie qu'une sorte de
+# courriel — l'invitation — et c'est sa seule porte d'entrée. À 2 par heure, la
+# troisième invitation de l'heure échoue dès qu'un vrai SMTP est branché :
+# l'Edge Function annule correctement l'invitation, mais l'administrateur qui
+# amorce une équipe se heurte à un mur au bout de deux personnes. 30 laisse
+# passer l'amorçage d'une équipe en une séance, s'aligne sur le `sms_sent = 30`
+# voisin, et plafonne toujours une boucle emballée à un coût borné.
+email_sent = 30
 # Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.
 sms_sent = 30
 # Number of anonymous sign-ins that can be made per hour per IP address. Requires enable_anonymous_sign_ins = true.
