@@ -10,8 +10,6 @@ const MESSAGES: Record<string, string> = {
   org_forbidden_for_internal: "Un agent ou un administrateur ne se rattache pas à une organisation.",
   user_already_attached: "Cette personne a déjà un compte rattaché.",
   invitation_already_pending: "Une invitation est déjà en attente pour cette adresse.",
-  arrival_route_mismatch:
-    "Un compte agent ou administrateur ne peut être créé que pour une personne connectée via le fournisseur d'authentification de l'entreprise, et non via un compte e-mail et mot de passe.",
   cannot_modify_self: "Vous ne pouvez pas modifier votre propre rôle ni vous désactiver.",
   no_pending_invitation: "Aucune invitation en attente pour cette personne.",
   profile_not_found: "Ce profil est introuvable.",

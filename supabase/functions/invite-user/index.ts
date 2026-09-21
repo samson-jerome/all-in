@@ -1,5 +1,5 @@
 import { handleCors, jsonResponse } from "../_shared/cors.ts";
-import { adminClient, APP_ROLES, normalizeEmail, requireAdmin, viaConfirmedOAuth } from "../_shared/auth.ts";
+import { adminClient, APP_ROLES, normalizeEmail, requireAdmin } from "../_shared/auth.ts";
 
 Deno.serve(async (req) => {
   const preflight = handleCors(req);
@@ -42,16 +42,9 @@ Deno.serve(async (req) => {
   }
 
   if (existing?.user_id) {
-    if (role !== "client") {
-      // Same predicate as handle_new_user(): only a confirmed, non-email
-      // arrival proves this account was not created by a self-service
-      // password signup. admin_find_user_by_email returns provider and
-      // is_confirmed for exactly this check, so the two rules cannot drift.
-      if (!viaConfirmedOAuth(existing.provider, existing.is_confirmed)) {
-        return jsonResponse(409, { error: "arrival_route_mismatch" });
-      }
-    }
-
+    // Free registration is closed, so an account with no profile can only
+    // be one our own invitation flow created earlier -- there is no other
+    // route left to distinguish.
     const { error: profileError } = await admin.from("profiles").insert({
       id: existing.user_id,
       full_name: email.split("@")[0],
@@ -118,12 +111,13 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Internal users arrive through OAuth: there is nothing to send them, and
-  // creating a password account would shadow their provider identity.
-  if (role !== "client") {
-    return jsonResponse(200, { status: "invitation_pending", invitation_id: invitation.id });
-  }
-
+  // Entry is by invitation only, for every role. This used to skip
+  // inviteUserByEmail for agent/admin, on the assumption they would create
+  // their auth.users row by signing in through OAuth instead. OAuth is
+  // deferred out of this lot, so that row would otherwise never exist and
+  // the invitation would stay pending forever. inviteUserByEmail is now the
+  // only remaining way to create it, for every role alike.
+  //
   // The invitation row must exist before this call: it creates the auth user
   // immediately, which fires the trigger that consumes the invitation.
   const { error: inviteError } = await admin.auth.admin.inviteUserByEmail(email);

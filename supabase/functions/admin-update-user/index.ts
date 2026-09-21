@@ -1,5 +1,5 @@
 import { handleCors, jsonResponse } from "../_shared/cors.ts";
-import { adminClient, APP_ROLES, requireAdmin, viaConfirmedOAuth } from "../_shared/auth.ts";
+import { adminClient, APP_ROLES, requireAdmin } from "../_shared/auth.ts";
 
 Deno.serve(async (req) => {
   const preflight = handleCors(req);
@@ -58,28 +58,6 @@ Deno.serve(async (req) => {
     body.org_id !== null
   ) {
     return jsonResponse(400, { error: "org_forbidden_for_internal" });
-  }
-
-  // A client account arrived by e-mail/password. Promoting it to an internal
-  // role would reproduce the exact privilege escalation invite-user already
-  // refuses, through a different door: internal staff must authenticate via
-  // OAuth. Same predicate as handle_new_user() and invite-user
-  // (viaConfirmedOAuth), sourced from the GoTrue admin API since this
-  // endpoint only has a user_id, not an e-mail. Checked before any write.
-  if ((nextRole === "agent" || nextRole === "admin") && current.role === "client") {
-    const { data: authUser, error: authUserError } = await admin.auth.admin.getUserById(userId);
-    if (authUserError || !authUser?.user) {
-      return jsonResponse(500, {
-        error: "auth_user_lookup_failed",
-        detail: authUserError?.message,
-      });
-    }
-
-    if (
-      !viaConfirmedOAuth(authUser.user.app_metadata?.provider, authUser.user.email_confirmed_at)
-    ) {
-      return jsonResponse(409, { error: "arrival_route_mismatch" });
-    }
   }
 
   const update: Record<string, unknown> = {};

@@ -184,11 +184,14 @@ refresh_token_reuse_interval = 10
 # refused, existing users still get a token, and the invite-user Edge
 # Function -- which calls the admin API with service_role -- is unaffected,
 # since GoTrue's admin-created-user path does not go through this check).
-# Caveat for whoever wires up OAuth in a later task: this flag is global,
-# so it will also block a first-time OAuth login from auto-provisioning an
-# internal user's account, which the product needs. That trade-off could
-# not be validated here since no OAuth provider is configured yet; revisit
-# this flag then.
+# Caveat: OAuth is out of scope for this lot (user decision, not a
+# technical constraint -- see 20260921070000_invitation_only_arrival.sql).
+# With no OAuth provider and this flag closed, the arrival model now rests
+# entirely on invited_at: public.handle_new_user() treats a non-null
+# invited_at as proof of a legitimate arrival, for every role. That
+# equivalence only holds while this flag stays false. Re-read
+# handle_new_user()'s own warning comment before ever setting it back to
+# true.
 enable_signup = false
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = false

@@ -16,8 +16,8 @@ insert into public.invitations (email, role, org_id) values
   ('clientb1@allin.test', 'client', '22222222-2222-2222-2222-222222222222'),
   ('inactive@allin.test', 'client', '11111111-1111-1111-1111-111111111111');
 
--- Internal users arrive through OAuth: provider set, email confirmed.
--- Clients arrive through an admin invite: invited_at set.
+-- Every account, internal or client, arrives through an admin invite:
+-- invited_at set, provider = 'email' (no OAuth provider exists any more).
 -- A password is added to every account so the dev environment stays usable.
 -- confirmation_token, recovery_token, email_change_token_new and email_change
 -- have no default in this GoTrue version and must not be left NULL: its Go
@@ -40,10 +40,10 @@ select
   '', '', '', '',
   now(), now()
 from (values
-  ('a0000000-0000-0000-0000-000000000001'::uuid, 'admin@allin.test',    'google', 'Awa Diallo'),
-  ('a0000000-0000-0000-0000-000000000002'::uuid, 'inactiveadmin@allin.test', 'google', 'Iris Fontaine'),
-  ('b0000000-0000-0000-0000-000000000001'::uuid, 'agent1@allin.test',   'google', 'Bruno Lemoine'),
-  ('b0000000-0000-0000-0000-000000000002'::uuid, 'agent2@allin.test',   'google', 'Bianca Rossi'),
+  ('a0000000-0000-0000-0000-000000000001'::uuid, 'admin@allin.test',    'email', 'Awa Diallo'),
+  ('a0000000-0000-0000-0000-000000000002'::uuid, 'inactiveadmin@allin.test', 'email', 'Iris Fontaine'),
+  ('b0000000-0000-0000-0000-000000000001'::uuid, 'agent1@allin.test',   'email', 'Bruno Lemoine'),
+  ('b0000000-0000-0000-0000-000000000002'::uuid, 'agent2@allin.test',   'email', 'Bianca Rossi'),
   ('c0000000-0000-0000-0000-000000000001'::uuid, 'clienta1@allin.test', 'email',  'Chloé Marchand'),
   ('c0000000-0000-0000-0000-000000000002'::uuid, 'clienta2@allin.test', 'email',  'Camille Faure'),
   ('c0000000-0000-0000-0000-000000000003'::uuid, 'clientb1@allin.test', 'email',  'Cyril Bertin'),

@@ -65,29 +65,33 @@ select is(
   0, 'une invitation révoquée ne rattache personne'
 );
 
--- 5. The security hole: a password signup must not claim an agent invitation.
+-- 5. The security hole: an account created outside the invitation route
+-- must not claim an agent invitation. Entry is by invitation only now, so
+-- this is no longer about the arrival provider -- it is about invited_at.
 insert into public.invitations (email, role) values ('t4@allin.test', 'agent');
 select pg_temp.new_auth_user('t4@allin.test', 'email', false, true) as t4_id \gset
 select is(
   (select count(*)::int from public.profiles where id = :'t4_id'),
-  0, 'une inscription par mot de passe ne peut pas s''emparer d''une invitation d''agent'
+  0, 'un compte créé hors du parcours d''invitation ne peut pas s''emparer d''une invitation d''agent'
 );
 
--- 6. The internal positive path: an agent invitation arriving through OAuth
--- with a confirmed address does produce a profile.
+-- 6. The internal positive path: an agent invitation arriving through the
+-- invitation flow, without any external provider, does produce a profile.
+-- This is the real production case: no assertion covered it before.
 insert into public.invitations (email, role) values ('t5@allin.test', 'agent');
-select pg_temp.new_auth_user('t5@allin.test', 'google', false, true) as t5_id \gset
+select pg_temp.new_auth_user('t5@allin.test', 'email', true, true) as t5_id \gset
 select is(
   (select role::text from public.profiles where id = :'t5_id'),
-  'agent', 'un agent arrivant par OAuth avec une adresse confirmée obtient son profil'
+  'agent', 'un agent invité obtient son profil, sans fournisseur externe'
 );
 
--- 7. Same route, but the address is not confirmed: no profile is created.
+-- 7. Same route, but the address is not confirmed: a profile is still
+-- created, because invited_at is what matters now, not confirmation.
 insert into public.invitations (email, role) values ('t6@allin.test', 'agent');
-select pg_temp.new_auth_user('t6@allin.test', 'google', false, false) as t6_id \gset
+select pg_temp.new_auth_user('t6@allin.test', 'email', true, false) as t6_id \gset
 select is(
-  (select count(*)::int from public.profiles where id = :'t6_id'),
-  0, 'un agent arrivant par OAuth sans adresse confirmée n''obtient aucun profil'
+  (select role::text from public.profiles where id = :'t6_id'),
+  'agent', 'un agent invité obtient son profil même sans adresse confirmée'
 );
 
 -- 8. The real GoTrue invite sequence: the row is inserted with invited_at
