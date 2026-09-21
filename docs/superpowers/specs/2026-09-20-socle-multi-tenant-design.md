@@ -231,6 +231,41 @@ faire ce choix table par table ; il n'est pas automatique.
   confirmation, comme « Retirer l'accès » le fait déjà : les deux font
   maintenant des dégâts comparables.
 
+### A-9 — pgTAP sort de la chaîne de migrations (2026-09-21)
+
+**Ce qui change.** L'arborescence de la section 12 ne liste que `seed.sql` sous
+`supabase/`. Il s'y ajoute `supabase/seeds/00_test_setup.sql`, et
+`[db.seed] sql_paths` les enchaîne dans cet ordre.
+
+**Pourquoi.** L'extension `pgtap` était créée sans condition par
+`20260920114452_enable_pgtap.sql`, dont la deuxième ligne demandait à un humain
+de la retirer avant promotion. Rien ne l'y obligeait, et une chaîne de
+migrations est précisément ce qui se rejoue sans surveillance. La dépendance
+est maintenant posée là où elle sert : un seed ne tourne qu'au `db reset`,
+localement et en intégration continue, et ne fait pas partie de ce que
+`supabase db push` promeut.
+
+`20260920114452` n'est pas réécrite — une migration déjà appliquée ne l'est
+jamais. Une nouvelle migration retire l'extension
+(`20260921100200_pgtap_out_of_the_migration_chain.sql`) ; la chaîne la crée
+donc puis la retire quelques instructions plus loin, ce qui est inerte, et le
+seed local la remet là où la suite pgTAP en a besoin.
+
+Le fichier est sous `seeds/` et non sous `tests/` : **mesuré**, `supabase test
+db` passe pg_prove sur tout `supabase/tests/**.sql` et pas seulement sur
+`tests/database/`, et un fichier d'amorçage sans plan TAP y fait échouer la
+suite entière sur « No plan found in TAP output ».
+
+**Ce qui ne change pas.** La ligne « Toutes les tables sont en `enable row
+level security` **et** `force row level security` » (section 4) n'appelle aucun
+amendement : elle n'avait simplement pas été honorée — les migrations
+n'appelaient qu'`enable`, et `relforcerowsecurity` valait faux sur les quatre
+tables. `20260921100100_force_rls_and_close_defaults.sql` la met en œuvre.
+Mesuré après coup : les quatre tables portent `relforcerowsecurity = t` et la
+suite pgTAP reste verte, comme attendu puisque toutes les tables et toutes les
+fonctions `SECURITY DEFINER` appartiennent à `postgres`, qui porte
+`rolbypassrls`.
+
 ## 1. Contexte
 
 L'objectif produit est une application de gestion de tickets multi-tenant, accessible

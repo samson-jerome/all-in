@@ -67,7 +67,17 @@ schema_paths = []
 enabled = true
 # Specifies an ordered list of seed files to load during db reset.
 # Supports glob patterns relative to supabase directory: "./seeds/*.sql"
-sql_paths = ["./seed.sql"]
+# ./seeds/00_test_setup.sql installe pgTAP, dépendance des tests et non du
+# schéma : les seeds ne tournent qu'au `db reset`, jamais sur un environnement
+# déployé, à la différence de la chaîne de migrations (cf.
+# 20260921100200_pgtap_out_of_the_migration_chain.sql). Ordre significatif :
+# l'amorçage des tests passe avant les fixtures.
+#
+# Il est sous ./seeds/ et non sous ./tests/ : mesuré, `supabase test db` passe
+# pg_prove sur tout ./tests/**.sql, pas seulement sur ./tests/database/, et un
+# fichier d'amorçage sans plan TAP y fait échouer la suite entière sur
+# « No plan found in TAP output ».
+sql_paths = ["./seeds/00_test_setup.sql", "./seed.sql"]
 
 [db.network_restrictions]
 # Enable management of network restrictions.

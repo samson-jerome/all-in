@@ -1,0 +1,19 @@
+-- pgTAP does not belong in a chain that replays unattended on production.
+--
+-- 20260920114452_enable_pgtap.sql creates the extension unconditionally, with
+-- a comment asking a human to drop it before promoting the schema. Nothing
+-- enforces that, and a migration chain is exactly the thing nobody watches
+-- while it runs. A test framework installed on a production database is not a
+-- catastrophe, but it is surface nobody chose and nobody audits.
+--
+-- The extension now belongs to the test bootstrap instead: supabase/tests/
+-- setup.sql, listed ahead of the fixtures in `[db.seed] sql_paths`. Seeds run
+-- on `supabase db reset` -- locally and in CI, where the tests run -- and are
+-- not part of what `supabase db push` promotes. The dependency sits where the
+-- dependency is used.
+--
+-- 20260920114452 itself is left untouched: an already-applied migration is
+-- never rewritten. The chain therefore creates the extension and drops it
+-- again a few statements later, which is inert, and the local seed puts it
+-- back where the pgTAP suite needs it.
+drop extension if exists pgtap;
