@@ -4,7 +4,17 @@ import { supabase } from "@/lib/supabase";
 import type { Database } from "@/lib/database.types";
 
 type Profile = Database["public"]["Tables"]["profiles"]["Row"];
-type ProfileError = { code?: string; message: string };
+type SessionError = { code?: string; message: string };
+
+/** Normalizes an unknown thrown value into the shape describeError expects. */
+function toSessionError(err: unknown): SessionError {
+  if (err && typeof err === "object" && "message" in err) {
+    const raw = err as { code?: unknown; message: unknown };
+    const code = typeof raw.code === "string" ? raw.code : undefined;
+    return { code, message: String(raw.message) };
+  }
+  return { message: String(err) };
+}
 
 /**
  * 'unlinked' is a normal state: an account with no profile, and no access.
@@ -22,9 +32,9 @@ export const useSessionStore = defineStore("session", () => {
   const profile = ref<Profile | null>(null);
   const agentOrgIds = ref<string[]>([]);
   // Set only when status is 'error': the raw failure behind the failed
-  // profile lookup, kept so a screen can turn it into a message via
-  // describeError instead of re-deriving one.
-  const error = ref<ProfileError | null>(null);
+  // lookup, kept so a screen can turn it into a message via describeError
+  // instead of re-deriving one.
+  const error = ref<SessionError | null>(null);
 
   const role = computed(() => profile.value?.role ?? null);
   const isAdmin = computed(() => role.value === "admin");
@@ -72,8 +82,21 @@ export const useSessionStore = defineStore("session", () => {
     // Loaded here even though lot 1 has nothing to filter: the ticket lists of
     // lot 2 need it from their very first render.
     if (data.role === "agent") {
-      const { data: rows } = await supabase.from("agent_organizations").select("org_id");
-      agentOrgIds.value = rows?.map((row) => row.org_id) ?? [];
+      const { data: rows, error: orgError } = await supabase
+        .from("agent_organizations")
+        .select("org_id");
+
+      if (orgError) {
+        // Same defect ruling 3 fixed for the profile query, one query
+        // later: a silent failure here would under-scope an agent's visible
+        // organisations instead of surfacing as a failure.
+        agentOrgIds.value = [];
+        error.value = orgError;
+        status.value = "error";
+        return;
+      }
+
+      agentOrgIds.value = rows.map((row) => row.org_id);
     } else {
       agentOrgIds.value = [];
     }
@@ -97,12 +120,25 @@ export const useSessionStore = defineStore("session", () => {
     if (readyPromise) return readyPromise;
 
     readyPromise = (async () => {
-      const { data } = await supabase.auth.getSession();
-      await applySession(data.session?.user.id ?? null);
+      try {
+        const { data } = await supabase.auth.getSession();
+        await applySession(data.session?.user.id ?? null);
 
-      supabase.auth.onAuthStateChange((_event, session) => {
-        void applySession(session?.user.id ?? null);
-      });
+        supabase.auth.onAuthStateChange((_event, session) => {
+          void applySession(session?.user.id ?? null);
+        });
+      } catch (err) {
+        // getSession() itself failed (storage denied, sandboxed context...).
+        // readyPromise is memoized and never reset, so letting this reject
+        // would leave it permanently rejected: whenReady() would throw for
+        // every future guard check, and main.ts's top-level await would
+        // never settle, leaving a blank page forever. Land on the terminal
+        // 'error' state instead, same as a failed profile lookup.
+        profile.value = null;
+        agentOrgIds.value = [];
+        status.value = "error";
+        error.value = toSessionError(err);
+      }
     })();
 
     return readyPromise;

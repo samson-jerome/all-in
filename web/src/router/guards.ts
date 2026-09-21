@@ -1,7 +1,11 @@
 import type { Router } from "vue-router";
 import { useSessionStore } from "@/stores/session";
 
-const PUBLIC_ROUTES = new Set([
+// Exported so AppShell can use the exact same notion of "an auth route" when
+// deciding whether a session-level error may cover the routed view -- a
+// second, separately maintained list would be the kind of divergence that
+// rots.
+export const PUBLIC_ROUTES = new Set([
   "login", "auth-callback", "set-password", "forgot-password", "unlinked", "forbidden",
 ]);
 

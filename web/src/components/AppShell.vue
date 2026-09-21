@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { useSessionStore } from "@/stores/session";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { describeError } from "@/lib/errors";
+import { PUBLIC_ROUTES } from "@/router/guards";
 
 const session = useSessionStore();
+const route = useRoute();
 const router = useRouter();
 
 async function signOut() {
@@ -14,6 +17,16 @@ async function signOut() {
 function retry() {
   window.location.reload();
 }
+
+// A public route (login, the invite/recovery callback, set-password,
+// forgot-password, unlinked, forbidden) is how someone gets in or recovers
+// access in the first place -- a missing or failed profile lookup there is
+// either expected (the profile isn't created yet) or irrelevant to what the
+// screen does. The error panel must never cover one of those, only a route
+// that actually depends on a resolved, working session.
+const showErrorPanel = computed(
+  () => session.status === "error" && !PUBLIC_ROUTES.has(String(route.name)),
+);
 </script>
 
 <template>
@@ -25,9 +38,7 @@ function retry() {
       <button class="ml-auto text-sm underline" @click="signOut">Se déconnecter</button>
     </header>
     <main class="mx-auto max-w-4xl p-6">
-      <!-- The profile lookup itself failed: show it everywhere rather than
-           letting a screen guess an access level from missing data. -->
-      <section v-if="session.status === 'error'" class="space-y-3">
+      <section v-if="showErrorPanel" class="space-y-3">
         <h1 class="text-xl font-semibold">Une erreur est survenue</h1>
         <p>{{ describeError(session.error) }}</p>
         <div class="flex gap-4">
