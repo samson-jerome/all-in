@@ -35,6 +35,20 @@ async function create() {
 }
 
 async function toggle(organization: Organization) {
+  // Since 20260921100000_org_is_active_cuts_access.sql this button is an
+  // access control and not a label: can_read_org() returns false for an
+  // inactive organisation, so deactivating it cuts every one of its clients
+  // off from the organisation and from each other, immediately. Confirmed the
+  // same way "Retirer l'accès" is on the invitations screen -- the two
+  // now do comparable damage.
+  if (organization.is_active) {
+    const confirmed = window.confirm(
+      `Désactiver ${organization.name} ? Ses clients perdront l'accès à l'organisation et ` +
+        `aux profils de leurs collègues dès leur requête suivante. Vous pourrez la réactiver ici.`,
+    );
+    if (!confirmed) return;
+  }
+
   const { error } = await supabase
     .from("organizations")
     .update({ is_active: !organization.is_active })

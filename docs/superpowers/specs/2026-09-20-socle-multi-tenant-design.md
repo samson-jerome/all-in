@@ -169,6 +169,68 @@ Deux corrections, toutes deux vérifiées dans un navigateur :
 Functions, elles, ont désormais une quatrième variable en plus des trois que
 la CLI injecte.
 
+### A-8 — Désactiver une organisation coupe l'accès de son locataire (2026-09-21)
+
+**Ce qui change.** La section 4 décrit `organizations.is_active` sans dire ce
+qu'il commande, et la matrice des politiques de la section 5 écrit le SELECT
+sur `organizations` `can_read_org(id)`, sans mention du drapeau. Le lot livré
+n'en tenait effectivement aucun compte : ni `auth_org()`, ni
+`agent_covers_org()`, ni `can_read_org()` ne consultaient
+`organizations.is_active`. Désactiver une organisation ne coupait rien — ses
+clients continuaient de lire sa ligne et tous les profils de leurs collègues —
+alors que l'écran d'administration présentait « Désactiver » et une colonne
+« Active / Inactive » comme un contrôle d'accès.
+
+`can_read_org()` contrôle désormais le drapeau
+(`20260921100000_org_is_active_cuts_access.sql`). Le SELECT sur
+`organizations` de la matrice se lit désormais
+`auth_role() = 'admin' or can_read_org(id)`.
+
+**Pourquoi.** Décision de l'utilisateur, prise pendant la revue de fin de
+branche : le bouton doit couper. Un drapeau qu'une interface d'administration
+présente comme un contrôle d'accès et qui n'en est pas est pire qu'absent.
+
+**Pourquoi dans `can_read_org()` et pas dans chaque politique.** C'est la
+définition unique de « cette organisation m'est visible », dont toutes les
+politiques du lot 2 dériveront (`can_read_org(tickets.org_id)`). Posée là, la
+règle arrive avec elles au lieu d'être à retenir quatre fois de plus.
+
+**Sans exception, pas même pour l'administrateur.** Une règle sans exception
+tient en tête et se teste en une assertion. `can_read_org()` est donc faux sur
+une organisation désactivée pour tout le monde, agents et administrateurs
+compris.
+
+**La contrepartie, qui est le piège de ce changement.** Un administrateur qui
+ne verrait plus une organisation désactivée ne pourrait jamais la réactiver :
+le drapeau deviendrait une porte à sens unique. La politique
+`organizations_select` porte donc sa propre clause administrateur explicite —
+exactement la forme qu'a déjà `profiles_select`, et pour la même raison : les
+écrans d'administration ont besoin d'un chemin vers la ligne qui ne passe pas
+par `can_read_org()`. L'administration n'est pas la location. Le lot 2 devra
+faire ce choix table par table ; il n'est pas automatique.
+
+**Retombées mesurées.**
+
+- Le client d'une organisation désactivée conserve la lecture de son propre
+  profil, par la branche `id = auth.uid()` de `profiles_select` : c'est ce qui
+  permet au store de session de distinguer « compte désactivé » de « aucun
+  profil ». Il perd l'organisation et tous les profils de ses collègues. Son
+  propre `profiles.is_active` n'est pas touché : au lot 1, il atteint donc
+  encore l'accueil, où il n'y a rien à lire. Le lot 2, où il y aura des
+  tickets, héritera de la coupure sans rien ajouter.
+- Un agent perd du portefeuille l'organisation désactivée, et ses clients avec.
+- Le jeu de fixtures ne porte aucune organisation inactive et n'en porte
+  toujours aucune : rendre l'une des trois inactive aurait déplacé tous les
+  comptes attendus des autres fichiers pgTAP pour une raison étrangère à ce
+  qu'ils mesurent. `supabase/tests/database/06_org_is_active.sql` désactive
+  Acme dans sa propre transaction, et la restitue par le `rollback` du fichier.
+- `pickerOptions()` (`UsersView.vue`) réinjecte toujours l'organisation
+  courante d'un utilisateur même désactivée — c'est une affectation réelle,
+  la cacher mentirait — mais l'option porte désormais « (désactivée — accès
+  coupé) ». Le bouton « Désactiver » de l'écran Organisations demande
+  confirmation, comme « Retirer l'accès » le fait déjà : les deux font
+  maintenant des dégâts comparables.
+
 ## 1. Contexte
 
 L'objectif produit est une application de gestion de tickets multi-tenant, accessible

@@ -55,8 +55,13 @@ async function load() {
 
 // Organisations offered in a picker: active only, plus the current value if
 // it happens to be one that has since been deactivated -- omitting it there
-// would misrepresent a real, still-effective assignment rather than just
-// hide an unrelated choice.
+// would misrepresent a real, still-recorded assignment rather than just hide
+// an unrelated choice.
+//
+// Since 20260921100000_org_is_active_cuts_access.sql, a deactivated
+// organisation no longer grants its clients anything: the assignment is still
+// recorded, but it no longer gives access. The reinjected option therefore
+// says so (see optionLabel below) instead of reading like any other choice.
 function pickerOptions(currentOrgId?: string | null): OrganizationOption[] {
   const active = organizations.value.filter((organization) => organization.is_active);
   if (!currentOrgId || active.some((organization) => organization.id === currentOrgId)) {
@@ -64,6 +69,14 @@ function pickerOptions(currentOrgId?: string | null): OrganizationOption[] {
   }
   const current = organizations.value.find((organization) => organization.id === currentOrgId);
   return current ? [...active, current] : active;
+}
+
+// Only the reinjected value above can ever be inactive: pickerOptions() with
+// no argument returns active organisations only.
+function optionLabel(organization: OrganizationOption): string {
+  return organization.is_active
+    ? organization.name
+    : `${organization.name} (désactivée — accès coupé)`;
 }
 
 async function updateUser(user: UserRow, changes: Record<string, unknown>): Promise<boolean> {
@@ -190,7 +203,7 @@ onMounted(load);
                     class="rounded border border-slate-300 px-2 py-1"
                     @change="onOrgChange(user, $event)">
               <option v-for="organization in pickerOptions(user.org_id)" :key="organization.id"
-                      :value="organization.id">{{ organization.name }}</option>
+                      :value="organization.id">{{ optionLabel(organization) }}</option>
             </select>
 
             <div v-else-if="user.role === 'agent'" class="space-y-1">
