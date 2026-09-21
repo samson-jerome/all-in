@@ -21,7 +21,7 @@ const MESSAGES: Record<string, string> = {
   // generic message, which would leave an administrator retrying an
   // invitation that cannot work until SITE_URL is set on the environment.
   site_url_not_configured:
-    "L'URL du site n'est pas configurée sur cet environnement : l'invitation n'a pas été envoyée.",
+    "L'URL du site est absente ou mal formée sur cet environnement : l'invitation n'a pas été envoyée.",
 };
 
 /**

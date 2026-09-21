@@ -20,6 +20,19 @@ import type { Database } from "./database.types";
  * ordering structural instead of conventional: anything able to observe this
  * value has, by definition, already imported this module, whose body runs it
  * before the client exists.
+ *
+ * Two consequences to keep in mind before reusing it:
+ *
+ * - **It is a snapshot of the initial page load, not a live reading.** That
+ *   is correct today because nothing in the application routes to
+ *   `/auth/callback` from inside the app: the only way there is a full load
+ *   from an e-mail link. The first in-app navigation to that route would
+ *   read a stale `"invite"` and bounce an already-signed-in person to the
+ *   password screen. Whoever adds such a navigation has to revisit this.
+ * - **This module now touches `window` at import time**, so it can no longer
+ *   be imported outside a DOM environment. The Vitest suite runs in `node`
+ *   and gets away with it only because it mocks this module
+ *   (`vi.mock("@/lib/supabase")`) instead of loading it.
  */
 export const authLinkType = new URLSearchParams(window.location.hash.slice(1)).get("type");
 

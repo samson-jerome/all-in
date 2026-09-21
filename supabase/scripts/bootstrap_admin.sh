@@ -68,10 +68,17 @@ EMAIL="${BOOTSTRAP_ADMIN_EMAIL#"${BOOTSTRAP_ADMIN_EMAIL%%[![:space:]]*}"}"
 EMAIL="${EMAIL%"${EMAIL##*[![:space:]]}"}"
 EMAIL="$(printf '%s' "$EMAIL" | tr '[:upper:]' '[:lower:]')"
 
-# Même forme que normalizeEmail() dans supabase/functions/_shared/auth.ts.
-# Ce contrôle n'est pas cosmétique : il garantit aussi que l'adresse ne
-# contient ni guillemet ni antislash, donc qu'elle s'interpole sans risque
-# dans le corps JSON plus bas et dans le paramètre psql plus haut.
+# Même forme que normalizeEmail() dans supabase/functions/_shared/auth.ts :
+# les deux moitiés du produit acceptent exactement les mêmes adresses.
+#
+# Ce contrôle ne dit rien du contenu de l'adresse au-delà de sa forme
+# générale. Il accepte l'apostrophe, le guillemet et l'antislash, tous légaux
+# dans une partie locale — mesuré, pas supposé. Il ne rend donc sûre aucune
+# interpolation, et plus aucune n'en dépend : le SQL passe par :'email', que
+# psql cite lui-même, et le corps JSON est échappé explicitement plus bas.
+# Une version antérieure de ce commentaire affirmait le contraire, et trois
+# interpolations brutes s'en autorisaient ; o'brien@allin.test mourait sur un
+# « syntax error at or near "brien" ».
 if ! printf '%s' "$EMAIL" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'; then
   echo "BOOTSTRAP_ADMIN_EMAIL n'est pas une adresse e-mail valide : $EMAIL" >&2
   exit 1
@@ -105,7 +112,7 @@ echo "  retour     : $REDIRECT_TO"
 psql "$DATABASE_URL" \
   --quiet \
   --set=ON_ERROR_STOP=1 \
-  --set=email="'$EMAIL'" \
+  --set=email="$EMAIL" \
   --file "$SQL_FILE"
 echo "  invitation : posée si elle manquait (l'insertion est conditionnelle)"
 
@@ -115,19 +122,22 @@ echo "  invitation : posée si elle manquait (l'insertion est conditionnelle)"
 # case ci-dessous). Sans cette lecture, le script ne saurait pas dire lequel
 # des deux il vient de faire.
 #
-# L'adresse est interpolée telle quelle : elle vient de passer le contrôle de
-# forme ci-dessus, qui exclut guillemets, antislashs et espaces. psql
-# n'applique pas la substitution de variables --set à une requête passée par
-# --command (mesuré : « syntax error at or near ":" »), donc :email n'est
-# utilisable que dans le fichier .sql joué par --file.
+# La requête passe par --file - (l'entrée standard) et non par --command :
+# psql n'applique pas la substitution de variables --set à une requête passée
+# par --command (mesuré : « syntax error at or near ":" »), alors qu'elle
+# s'applique à un script, stdin compris. C'est ce qui permet d'écrire
+# :'email' ici aussi, et de n'interpoler l'adresse nulle part à la main.
 account_existed="$(
   psql "$DATABASE_URL" \
     --quiet --tuples-only --no-align \
     --set=ON_ERROR_STOP=1 \
-    --command "select exists (
-                 select 1 from auth.users
-                  where lower(trim(email)) = '$EMAIL'
-               );"
+    --set=email="$EMAIL" \
+    --file - <<'SQL'
+select exists (
+  select 1 from auth.users
+   where lower(trim(email)) = lower(trim(:'email'))
+);
+SQL
 )"
 
 # --- 2. Le compte ------------------------------------------------------------
@@ -137,15 +147,29 @@ mail_sent=non
 http_body_file="$(mktemp)"
 trap 'rm -f "$http_body_file"' EXIT
 
+# Le contrôle de forme plus haut accepte le guillemet et l'antislash : le
+# corps JSON doit donc être construit, pas interpolé. L'adresse ne peut en
+# revanche contenir ni espace ni saut de ligne, ce qui suffit pour le reste.
+email_json="$(printf '%s' "$EMAIL" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+
+# Les deux en-têtes qui portent la clé passent par --config - plutôt que par
+# --header : un argument de ligne de commande est lisible dans `ps` par
+# n'importe quel utilisateur local pendant toute la durée de l'appel, alors
+# que l'entrée standard ne l'est pas. Le reste des options reste en argv,
+# n'ayant rien de secret. Un jeton service_role est un JWT (base64url et
+# points) : il ne contient ni guillemet ni antislash, donc rien à échapper
+# pour le format de configuration de curl.
 http_status="$(
   curl --silent --show-error \
     --output "$http_body_file" \
     --write-out '%{http_code}' \
     --request POST "$SUPABASE_URL/auth/v1/invite?redirect_to=$REDIRECT_TO" \
-    --header "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
-    --header "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
     --header 'Content-Type: application/json' \
-    --data "{\"email\":\"$EMAIL\"}"
+    --data "{\"email\":\"$email_json\"}" \
+    --config - <<CURLCFG
+header = "apikey: $SUPABASE_SERVICE_ROLE_KEY"
+header = "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+CURLCFG
 )"
 http_body="$(cat "$http_body_file")"
 
@@ -192,10 +216,13 @@ role="$(
   psql "$DATABASE_URL" \
     --quiet --tuples-only --no-align \
     --set=ON_ERROR_STOP=1 \
-    --command "select p.role
-                 from public.profiles p
-                 join auth.users u on u.id = p.id
-                where lower(trim(u.email)) = '$EMAIL';"
+    --set=email="$EMAIL" \
+    --file - <<'SQL'
+select p.role
+  from public.profiles p
+  join auth.users u on u.id = p.id
+ where lower(trim(u.email)) = lower(trim(:'email'));
+SQL
 )"
 
 if [ "$role" = "admin" ]; then
@@ -210,7 +237,26 @@ fi
 
 if [ -z "$role" ]; then
   echo "Aucun profil n'est rattaché à $EMAIL." >&2
-  echo "Le trigger public.handle_new_user() n'a pas consommé l'invitation." >&2
+  if [ "$mail_sent" = "non" ]; then
+    # GoTrue a répondu 422 email_exists : un compte existe déjà pour cette
+    # adresse et il est déjà accepté, mais il n'a pas de profil. Comme
+    # l'invitation a été refusée, invited_at n'a pas bougé, donc le trigger
+    # ne s'est pas déclenché — ce n'est pas lui qu'il faut incriminer. Et
+    # l'invitation posée à l'étape 1 reste en attente, sans rien pour la
+    # consommer.
+    echo "Un compte existe déjà pour cette adresse et il a déjà été accepté, mais il" >&2
+    echo "ne porte aucun profil. GoTrue a donc refusé l'invitation (422 email_exists)" >&2
+    echo "sans toucher à invited_at, et le trigger public.handle_new_user() n'avait" >&2
+    echo "aucune raison de se déclencher." >&2
+    echo "" >&2
+    echo "L'invitation posée à l'étape 1 reste en attente et rien ne la consommera." >&2
+    echo "C'est exactement le cas que l'Edge Function invite-user sait traiter, en" >&2
+    echo "rattachant le profil directement : invitez cette adresse depuis l'écran" >&2
+    echo "d'administration, ou supprimez le compte pour réamorcer depuis zéro." >&2
+  else
+    echo "L'invitation a bien été envoyée, mais le trigger public.handle_new_user()" >&2
+    echo "ne l'a pas consommée." >&2
+  fi
 else
   echo "Le profil de $EMAIL porte le rôle '$role' et non 'admin'." >&2
 fi

@@ -1,6 +1,10 @@
 import { execSync } from "node:child_process";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/database.types";
+
+/** Row returned by public.admin_find_user_by_email, as the generated types
+ * describe it. Named once so the cleanup helpers below agree. */
+type AccountLookupRow = Database["public"]["Functions"]["admin_find_user_by_email"]["Returns"][number];
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const BASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -143,6 +147,84 @@ describe("contrôle d'accès des Edge Functions", () => {
       const body = await response.json();
       expect(response.status).toBe(200);
       expect(body.status).toBe("invited");
+    });
+  });
+
+  // Regression guard for the fix round of task 13: invite-user used to call
+  // inviteUserByEmail without a `redirectTo`, so GoTrue built the link with
+  // its own `site_url` -- the front's root -- where AuthCallbackView is not
+  // mounted. The invited person landed signed in, was never asked for a
+  // password, and could not sign in again once that first session expired.
+  // It is the product's only entry route, and nothing in any suite noticed:
+  // the sole proof was a browser run nobody could replay. This asserts the
+  // one property that made the link usable.
+  describe("invite-user, cible du lien d'invitation", () => {
+    const email = `agent-redirect-${Date.now()}@allin.test`;
+    let serviceRoleKey = "";
+    let mailpitUrl = "";
+    let admin: SupabaseClient<Database>;
+
+    beforeAll(() => {
+      // Same approach as the blocks above: read from the CLI rather than
+      // commit anything. MAILPIT_URL comes from the same output, so the
+      // mail server's address is not hard-coded here either.
+      const output = execSync("npx supabase status -o env", { encoding: "utf-8" });
+      const keyMatch = output.match(/SERVICE_ROLE_KEY="([^"]+)"/);
+      const mailMatch = output.match(/MAILPIT_URL="([^"]+)"/);
+      if (!keyMatch) throw new Error("clé service_role introuvable dans `supabase status`");
+      if (!mailMatch) throw new Error("MAILPIT_URL introuvable dans `supabase status`");
+      serviceRoleKey = keyMatch[1];
+      mailpitUrl = mailMatch[1];
+      admin = createClient<Database>(BASE_URL, serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+    });
+
+    afterAll(async () => {
+      if (!serviceRoleKey) return;
+      const { data: found } = await admin
+        .rpc("admin_find_user_by_email", { p_email: email })
+        .maybeSingle<AccountLookupRow>();
+      if (found?.user_id) {
+        await admin.auth.admin.deleteUser(found.user_id);
+      }
+      await admin.from("invitations").delete().eq("email", email);
+    });
+
+    /** The invitation mail for `address`, polled: GoTrue sends it after it
+     * has already answered our HTTP call, so it is not there yet on return. */
+    async function waitForInvitationLink(address: string): Promise<string> {
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const listed = await fetch(`${mailpitUrl}/api/v1/messages?limit=50`).then((r) => r.json());
+        const message = listed.messages?.find(
+          (m: { To?: { Address: string }[] }) => m.To?.[0]?.Address === address,
+        );
+        if (message) {
+          const body = await fetch(`${mailpitUrl}/api/v1/message/${message.ID}`).then((r) =>
+            r.json(),
+          );
+          const link = String(body.Text ?? "").match(/https?:\/\/\S*\/auth\/v1\/verify\S*/);
+          if (link) return link[0];
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      throw new Error(`aucun lien d'invitation reçu pour ${address}`);
+    }
+
+    it("envoie un lien qui renvoie sur /auth/callback, et pas sur la racine du site", async () => {
+      const response = await call("invite-user", tokens[ADMIN_EMAIL], { email, role: "agent" });
+      expect(response.status).toBe(200);
+
+      const link = await waitForInvitationLink(email);
+      const redirectTo = new URL(link).searchParams.get("redirect_to");
+
+      // Asserted on the path rather than on a full URL: the suite has no
+      // business knowing SITE_URL, and the property that matters is that the
+      // link reaches the one route which asks for a password. Without the
+      // `redirectTo` argument, GoTrue puts its own site_url here -- the
+      // root -- and this fails.
+      expect(redirectTo).not.toBeNull();
+      expect(new URL(redirectTo!).pathname).toBe("/auth/callback");
     });
   });
 

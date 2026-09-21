@@ -54,8 +54,18 @@ const SITE_URL = Deno.env.get("SITE_URL");
 const AUTH_CALLBACK_PATH = "/auth/callback";
 
 /**
- * Where an invitation link must send the person, or null if SITE_URL is not
- * configured.
+ * Same shape check as supabase/scripts/bootstrap_admin.sh applies to
+ * SITE_URL. The two halves of the product build the same URL and must agree
+ * on what a usable value is: a scheme-less `127.0.0.1:5173` is not merely
+ * untidy, it produces a `redirect_to` GoTrue rejects -- and GoTrue's way of
+ * rejecting it is to fall back to its own `site_url`, silently reinstating
+ * the very defect the no-fallback rule below exists to prevent.
+ */
+const SITE_URL_PATTERN = /^https?:\/\/[^\s"?#&]+$/;
+
+/**
+ * Where an invitation link must send the person, or null when SITE_URL is
+ * missing or malformed.
  *
  * There is deliberately no fallback. Calling inviteUserByEmail without a
  * `redirectTo` is not a neutral default: GoTrue then uses its own
@@ -70,7 +80,7 @@ const AUTH_CALLBACK_PATH = "/auth/callback";
  * or GoTrue refuses the redirection.
  */
 export function inviteRedirectTo(): string | null {
-  if (!SITE_URL) return null;
+  if (!SITE_URL || !SITE_URL_PATTERN.test(SITE_URL)) return null;
   return `${SITE_URL.replace(/\/+$/, "")}${AUTH_CALLBACK_PATH}`;
 }
 

@@ -31,8 +31,15 @@ la place de l'autre.
 
 L'application répond sur http://127.0.0.1:5173, les courriels de
 développement sont lisibles sur http://127.0.0.1:54324. Les Edge Functions
-sont servies par `npm run db:start` ; pour les recharger à chaud pendant leur
-développement, `npm run fn:serve` dans un autre terminal.
+sont servies par `npm run db:start` ; pour les développer à part,
+`npm run fn:serve` dans un autre terminal.
+
+**Après avoir modifié une Edge Function, redémarrez la pile** —
+`npm run db:stop && npm run db:start`. Le rechargement à chaud du runtime
+(`[edge_runtime] policy = "per_worker"`) s'est montré peu fiable : observé,
+un worker a continué à servir l'ancien code plus d'une minute après la
+modification du fichier, ce qui fait passer des tests contre une version qui
+n'est plus celle du dépôt.
 
 ## Amorcer un environnement
 
@@ -114,7 +121,7 @@ racine, les commandes du front dans `web/`.
 | `npm run db:reset` | Rejoue migrations et fixtures depuis zéro |
 | `npm run db:test` | Suite pgTAP du cloisonnement |
 | `npm run db:types` | Régénère `web/src/lib/database.types.ts` depuis le schéma |
-| `npm run fn:serve` | Sert les Edge Functions avec rechargement à chaud |
+| `npm run fn:serve` | Sert les Edge Functions à part (variables prises dans `[edge_runtime.secrets]`, aucun fichier d'environnement requis) |
 | `npm run fn:check` | Vérifie les types des Edge Functions (`deno check`) |
 | `npm run admin:bootstrap` | Amorce le premier administrateur (variables ci-dessus) |
 | `npm run dev` (dans `web/`) | Lance le front |
