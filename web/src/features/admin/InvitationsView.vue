@@ -8,6 +8,12 @@ import type { Database } from "@/lib/database.types";
 
 type Invitation = Database["public"]["Tables"]["invitations"]["Row"];
 
+// This column reads as an access state, so it has to be one. It is kept
+// truthful at the source rather than reinterpreted here: admin-update-user
+// clears `revoked` when it reactivates an account, so a reactivated person is
+// never shown "Révoquée" over a fully active profile. The front could not fix
+// this on its own anyway -- invitations carries an email, profiles carries no
+// email column, and no query available to a browser joins the two.
 const STATUS_LABELS: Record<string, string> = {
   pending: "En attente",
   accepted: "Acceptée",
@@ -132,7 +138,8 @@ onMounted(async () => {
     <p class="text-sm text-slate-500">
       Pour redonner l'accès à une personne qui l'a perdu, utilisez « Réactiver » sur l'écran
       Utilisateurs : son profil existe toujours, désactivé, et une nouvelle invitation à la
-      même adresse sera refusée.
+      même adresse sera refusée. La ligne ci-dessous repasse alors à « Acceptée » et
+      « Retirer l'accès » redevient disponible.
     </p>
 
     <p v-if="notice" class="text-sm text-slate-700">{{ notice }}</p>

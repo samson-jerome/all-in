@@ -343,4 +343,240 @@ describe("contrôle d'accès des Edge Functions", () => {
       expect(profile?.is_active).toBe(true);
     });
   });
+
+  // The two administration screens used to contradict each other about
+  // access: revoke-invitation leaves the invitation `revoked` and the profile
+  // deactivated, and the documented way back -- "Réactiver" on the users
+  // screen -- restored is_active while leaving the invitation `revoked`. The
+  // users screen then said "Actif" about an account the invitations screen
+  // called "Révoquée", with no control offered to change it, and the
+  // endpoint's own idempotence guard meant that account could never be cut
+  // off through that button again. admin-update-user now clears the status
+  // when it reactivates. This is the only automated check of that.
+  describe("réactivation, cohérence des deux écrans", () => {
+    const email = `agent-reactivate-${Date.now()}@allin.test`;
+    let serviceRoleKey = "";
+    let admin: SupabaseClient<Database>;
+
+    beforeAll(() => {
+      const output = execSync("npx supabase status -o env", { encoding: "utf-8" });
+      const match = output.match(/SERVICE_ROLE_KEY="([^"]+)"/);
+      if (!match) throw new Error("clé service_role introuvable dans `supabase status`");
+      serviceRoleKey = match[1];
+      admin = createClient<Database>(BASE_URL, serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+    });
+
+    afterAll(async () => {
+      if (!serviceRoleKey) return;
+      const { data: found } = await admin
+        .rpc("admin_find_user_by_email", { p_email: email })
+        .maybeSingle<AccountLookupRow>();
+      if (found?.user_id) await admin.auth.admin.deleteUser(found.user_id);
+      await admin.from("invitations").delete().eq("email", email);
+    });
+
+    it("réactiver un compte remet son invitation à 'accepted', et non à 'revoked'", async () => {
+      const inviteResponse = await call("invite-user", tokens[ADMIN_EMAIL], { email, role: "agent" });
+      const inviteBody = await inviteResponse.json();
+      expect(inviteResponse.status).toBe(200);
+      const invitationId = inviteBody.invitation_id;
+
+      const revoked = await call("revoke-invitation", tokens[ADMIN_EMAIL], {
+        invitation_id: invitationId,
+      });
+      expect(revoked.status).toBe(200);
+
+      const { data: account } = await admin
+        .rpc("admin_find_user_by_email", { p_email: email })
+        .maybeSingle<AccountLookupRow>();
+
+      const reactivated = await call("admin-update-user", tokens[ADMIN_EMAIL], {
+        user_id: account?.user_id,
+        is_active: true,
+      });
+      expect(reactivated.status).toBe(200);
+
+      const { data: profile } = await admin
+        .from("profiles")
+        .select("is_active")
+        .eq("id", account?.user_id ?? "")
+        .single();
+      expect(profile?.is_active).toBe(true);
+
+      // The point of the whole block: the security screen must not keep
+      // calling "Révoquée" an account the users screen calls "Actif".
+      const { data: invitation } = await admin
+        .from("invitations")
+        .select("status")
+        .eq("id", invitationId)
+        .single();
+      expect(invitation?.status).toBe("accepted");
+    });
+  });
+
+  // admin-update-user is the endpoint on which a privilege escalation was
+  // actually found during this lot, and it was the least covered of the
+  // three: the tests above prove only that non-administrators get a 403 and
+  // that an administrator reaches input validation. Nothing exercised the
+  // cannot_modify_self guard, a successful role change, the portfolio purge,
+  // or the org_forbidden_for_internal / org_required_for_client transitions
+  // -- which is precisely the logic that was hardened after the escalation.
+  //
+  // This reproduces, for this endpoint, the pair revoke-invitation already
+  // has: one end-to-end test, and guard tests that also assert nothing was
+  // written. A guard checked only through its status code cannot tell a
+  // refusal from a refusal issued after the write already landed.
+  describe("admin-update-user, transitions et gardes", () => {
+    const email = `agent-updates-${Date.now()}@allin.test`;
+    const ACME = "11111111-1111-1111-1111-111111111111";
+    let serviceRoleKey = "";
+    let admin: SupabaseClient<Database>;
+    let userId = "";
+
+    beforeAll(async () => {
+      const output = execSync("npx supabase status -o env", { encoding: "utf-8" });
+      const match = output.match(/SERVICE_ROLE_KEY="([^"]+)"/);
+      if (!match) throw new Error("clé service_role introuvable dans `supabase status`");
+      serviceRoleKey = match[1];
+      admin = createClient<Database>(BASE_URL, serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+
+      const response = await call("invite-user", tokens[ADMIN_EMAIL], { email, role: "agent" });
+      if (response.status !== 200) {
+        throw new Error(`création du compte de test impossible : HTTP ${response.status}`);
+      }
+      const { data: account } = await admin
+        .rpc("admin_find_user_by_email", { p_email: email })
+        .maybeSingle<AccountLookupRow>();
+      if (!account?.user_id) throw new Error("compte de test introuvable après l'invitation");
+      userId = account.user_id;
+    });
+
+    afterAll(async () => {
+      if (!serviceRoleKey || !userId) return;
+      await admin.auth.admin.deleteUser(userId);
+      await admin.from("invitations").delete().eq("email", email);
+    });
+
+    /** The profile as the database actually holds it. */
+    async function readProfile() {
+      const { data } = await admin
+        .from("profiles")
+        .select("role, org_id, is_active")
+        .eq("id", userId)
+        .single();
+      return data;
+    }
+
+    it("change le rôle, et purge le portefeuille sur la bascule vers client", async () => {
+      // The portfolio has to be non-empty for the purge to prove anything.
+      await admin.from("agent_organizations").insert({ agent_id: userId, org_id: ACME });
+
+      const toClient = await call("admin-update-user", tokens[ADMIN_EMAIL], {
+        user_id: userId,
+        role: "client",
+        org_id: ACME,
+      });
+      expect(toClient.status).toBe(200);
+
+      expect(await readProfile()).toMatchObject({ role: "client", org_id: ACME });
+
+      const { data: portfolio } = await admin
+        .from("agent_organizations")
+        .select("org_id")
+        .eq("agent_id", userId);
+      expect(portfolio).toEqual([]);
+    });
+
+    it("promeut vers un rôle interne, qui ne porte plus d'organisation", async () => {
+      const toAdmin = await call("admin-update-user", tokens[ADMIN_EMAIL], {
+        user_id: userId,
+        role: "admin",
+      });
+      expect(toAdmin.status).toBe(200);
+      expect(await readProfile()).toMatchObject({ role: "admin", org_id: null });
+    });
+
+    it("refuse une organisation sur un rôle interne, sans rien écrire", async () => {
+      const before = await readProfile();
+
+      const response = await call("admin-update-user", tokens[ADMIN_EMAIL], {
+        user_id: userId,
+        role: "agent",
+        org_id: ACME,
+      });
+      const body = await response.json();
+      expect(response.status).toBe(400);
+      expect(body.error).toBe("org_forbidden_for_internal");
+
+      // The refusal must happen before the write, not after it.
+      expect(await readProfile()).toEqual(before);
+    });
+
+    it("refuse un client sans organisation, sans rien écrire", async () => {
+      // The account is internal at this point, so it carries no org_id to
+      // fall back on: asking for `client` with nothing else is exactly the
+      // case org_required_for_client exists for.
+      const before = await readProfile();
+
+      const response = await call("admin-update-user", tokens[ADMIN_EMAIL], {
+        user_id: userId,
+        role: "client",
+      });
+      const body = await response.json();
+      expect(response.status).toBe(400);
+      expect(body.error).toBe("org_required_for_client");
+
+      expect(await readProfile()).toEqual(before);
+    });
+
+    it("refuse qu'un administrateur change son propre rôle, sans rien modifier", async () => {
+      const { data: self } = await admin
+        .rpc("admin_find_user_by_email", { p_email: ADMIN_EMAIL })
+        .maybeSingle<AccountLookupRow>();
+
+      const response = await call("admin-update-user", tokens[ADMIN_EMAIL], {
+        user_id: self?.user_id,
+        role: "client",
+        org_id: ACME,
+      });
+      const body = await response.json();
+      expect(response.status).toBe(400);
+      expect(body.error).toBe("cannot_modify_self");
+
+      // An administrator who demoted themselves would lock the environment
+      // out of its own administration. The status code alone would not catch
+      // a regression that writes first and refuses after.
+      const { data: profile } = await admin
+        .from("profiles")
+        .select("role, is_active")
+        .eq("id", self?.user_id ?? "")
+        .single();
+      expect(profile).toMatchObject({ role: "admin", is_active: true });
+    });
+
+    it("refuse qu'un administrateur se désactive, sans rien modifier", async () => {
+      const { data: self } = await admin
+        .rpc("admin_find_user_by_email", { p_email: ADMIN_EMAIL })
+        .maybeSingle<AccountLookupRow>();
+
+      const response = await call("admin-update-user", tokens[ADMIN_EMAIL], {
+        user_id: self?.user_id,
+        is_active: false,
+      });
+      const body = await response.json();
+      expect(response.status).toBe(400);
+      expect(body.error).toBe("cannot_modify_self");
+
+      const { data: profile } = await admin
+        .from("profiles")
+        .select("role, is_active")
+        .eq("id", self?.user_id ?? "")
+        .single();
+      expect(profile).toMatchObject({ role: "admin", is_active: true });
+    });
+  });
 });

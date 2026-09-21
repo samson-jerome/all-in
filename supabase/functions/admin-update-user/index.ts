@@ -124,5 +124,55 @@ Deno.serve(async (req) => {
     if ("error" in result) return result.error;
   }
 
+  // Reactivation also clears the `revoked` status revoke-invitation left
+  // behind, because that status is what the invitations screen reads.
+  //
+  // revoke-invitation marks the invitation `revoked` AND deactivates the
+  // profile. The way back, which the invitations screen itself points at, is
+  // "Réactiver" here -- and it used to restore profiles.is_active while
+  // leaving the invitation `revoked`. The users screen then said "Actif"
+  // about an account the security screen called "Révoquée", with no control
+  // offered to change it. Worse than the contradiction: `revoked` is what
+  // revoke-invitation tests for idempotence, so that account could never be
+  // cut off again through that button -- the endpoint returned
+  // `already_revoked` without touching anything.
+  //
+  // Chosen over the other way out -- teaching the invitations screen to
+  // display the profile's real is_active -- for two reasons. The front cannot
+  // make that join at all: invitations carries an email, profiles carries no
+  // email column, and nothing readable from a browser bridges the two.
+  // And displaying the truth would have left the endpoint just as unable to
+  // re-cut access. `status` is a current-state column in this model, not an
+  // audit log: there is no history table behind it, and an account whose
+  // access has been restored is, currently, accepted.
+  if (body?.is_active === true) {
+    const { data: account, error: accountError } = await admin.auth.admin.getUserById(userId);
+    const email = account?.user?.email?.trim().toLowerCase();
+
+    if (accountError || !email) {
+      // Deliberately not fatal. profiles.is_active is the source of truth for
+      // access and it is already written; answering 500 here would tell an
+      // administrator the reactivation failed when it succeeded. Logged
+      // instead, with what it takes to finish the job by hand.
+      console.error(
+        `admin-update-user: compte ${userId} réactivé, mais son adresse est introuvable — statut d'invitation laissé à 'revoked' : ${
+          accountError?.message ?? "aucune adresse sur le compte"
+        }`,
+      );
+    } else {
+      const { error: reviveError } = await admin
+        .from("invitations")
+        .update({ status: "accepted" })
+        .eq("email", email)
+        .eq("status", "revoked");
+
+      if (reviveError) {
+        console.error(
+          `admin-update-user: compte ${userId} (${email}) réactivé, mais le statut d'invitation n'a pas pu être repris — ${reviveError.message}`,
+        );
+      }
+    }
+  }
+
   return jsonResponse(200, { status: "updated", user_id: userId });
 });
