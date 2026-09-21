@@ -1,22 +1,19 @@
-// Revokes an invitation that is still `pending`.
+// Revokes an invitation and, if the account it created still exists,
+// withdraws its access.
 //
-// HOLDING COMMENT (task 13a, fix round 1): as things stand, this endpoint is
-// unreachable in practice. invite-user now calls inviteUserByEmail for
-// every role, not just client, so every product path resolves an
-// invitation before this endpoint could ever see it `pending`: the
-// new-invitation branch inserts it `pending` and the trigger flips it to
-// `accepted` before that same request returns, the existing-account branch
-// writes it `accepted` directly, and the failure branch deletes the row
-// outright. There is no longer a window in which `.eq("status", "pending")`
-// below can match anything -- it will only ever return
-// `404 no_pending_invitation`. Withdrawing a person's access, client or
-// internal, goes through admin-update-user with is_active: false.
+// Task 13a's fix round left a correction-of-fact comment here: once
+// invite-user started calling inviteUserByEmail for every role, no product
+// path ever left an invitation `pending` any more (the trigger accepts it
+// immediately, the existing-account branch writes it accepted directly, and
+// the failure branch deletes the row outright), so the old
+// `.eq("status", "pending")` update below could never match anything.
 //
-// Whether this endpoint should be removed, repurposed, or kept as-is is a
-// product decision that has been put to the user; this comment is a
-// correction of fact pending that decision, not a change of behaviour.
+// The capability an administrator expects behind this button -- "cancel
+// this invitation, that person must not get in" -- is still legitimate.
+// Under the new model it means: mark the invitation revoked AND remove the
+// access of the account it created.
 import { handleCors, jsonResponse } from "../_shared/cors.ts";
-import { adminClient, requireAdmin } from "../_shared/auth.ts";
+import { adminClient, deactivateAccount, requireAdmin } from "../_shared/auth.ts";
 
 Deno.serve(async (req) => {
   const preflight = handleCors(req);
@@ -31,16 +28,62 @@ Deno.serve(async (req) => {
     return jsonResponse(400, { error: "invalid_invitation_id" });
   }
 
-  const { data, error } = await adminClient()
+  const admin = adminClient();
+
+  const { data: invitation, error: readError } = await admin
     .from("invitations")
-    .update({ status: "revoked" })
+    .select("id, email, status")
     .eq("id", invitationId)
-    .eq("status", "pending")
-    .select("id")
     .maybeSingle();
 
-  if (error) return jsonResponse(500, { error: "revoke_failed", detail: error.message });
-  if (!data) return jsonResponse(404, { error: "no_pending_invitation" });
+  if (readError) return jsonResponse(500, { error: "read_failed", detail: readError.message });
+  if (!invitation) return jsonResponse(404, { error: "invitation_not_found" });
 
-  return jsonResponse(200, { status: "revoked", invitation_id: data.id });
+  // Idempotent: a double click, or a retry after a lost response, must not
+  // turn into an error.
+  if (invitation.status === "revoked") {
+    return jsonResponse(200, { status: "already_revoked", invitation_id: invitation.id });
+  }
+
+  const { data: account, error: lookupError } = await admin
+    .rpc("admin_find_user_by_email", { p_email: invitation.email })
+    .maybeSingle();
+
+  if (lookupError) {
+    return jsonResponse(500, { error: "lookup_failed", detail: lookupError.message });
+  }
+
+  let accessRevoked = false;
+
+  if (account?.has_profile) {
+    // Same rule as admin-update-user: an administrator must not be able to
+    // remove their own access, through this endpoint either.
+    if (account.user_id === guard.callerId) {
+      return jsonResponse(400, { error: "cannot_modify_self" });
+    }
+
+    const result = await deactivateAccount(admin, account.user_id);
+    if ("error" in result) return result.error;
+    accessRevoked = true;
+  }
+  // Else: the invitation was never consumed into an account (the bootstrap
+  // case). Nothing to remove access from -- fall through to step 4.
+
+  // Access must be withdrawn before the invitation is marked revoked: if
+  // this second write fails, the resulting state is "access already
+  // removed, invitation still accepted", which is safe. The reverse order
+  // would leave a revoked invitation on an account that is still active.
+  // Do not swap this order.
+  const { error: revokeError } = await admin
+    .from("invitations")
+    .update({ status: "revoked" })
+    .eq("id", invitationId);
+
+  if (revokeError) return jsonResponse(500, { error: "revoke_failed", detail: revokeError.message });
+
+  return jsonResponse(200, {
+    status: "revoked",
+    invitation_id: invitationId,
+    access_revoked: accessRevoked,
+  });
 });

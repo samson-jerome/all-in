@@ -1,5 +1,5 @@
 import { handleCors, jsonResponse } from "../_shared/cors.ts";
-import { adminClient, APP_ROLES, requireAdmin } from "../_shared/auth.ts";
+import { adminClient, APP_ROLES, deactivateAccount, requireAdmin } from "../_shared/auth.ts";
 
 Deno.serve(async (req) => {
   const preflight = handleCors(req);
@@ -76,7 +76,10 @@ Deno.serve(async (req) => {
     update.org_id = null;
   }
 
-  if (body?.is_active !== undefined) {
+  // A deactivation (is_active: false) is applied separately below through
+  // deactivateAccount(), shared with revoke-invitation. Reactivation and any
+  // other is_active value still go through this same combined update.
+  if (body?.is_active !== undefined && body.is_active !== false) {
     update.is_active = body.is_active;
   }
 
@@ -106,11 +109,9 @@ Deno.serve(async (req) => {
     return jsonResponse(500, { error: "update_failed", detail: updateError.message });
   }
 
-  // Deactivation already cuts data access through auth_role(); dropping the
-  // sessions also gets the person logged out of their browser.
   if (body?.is_active === false) {
-    const { error } = await admin.rpc("admin_revoke_sessions", { p_user_id: userId });
-    if (error) return jsonResponse(500, { error: "session_revoke_failed", detail: error.message });
+    const result = await deactivateAccount(admin, userId);
+    if ("error" in result) return result.error;
   }
 
   return jsonResponse(200, { status: "updated", user_id: userId });

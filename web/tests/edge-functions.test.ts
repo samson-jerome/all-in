@@ -144,4 +144,77 @@ describe("contrôle d'accès des Edge Functions", () => {
       expect(body.status).toBe("invited");
     });
   });
+
+  // Regression coverage for task 13b: since task 13a made invite-user
+  // resolve every invitation immediately (accepted or deleted, never left
+  // pending), revoke-invitation's old `.eq("status", "pending")` filter
+  // could no longer match anything -- every call returned
+  // `404 no_pending_invitation`. Withdrawing access now means removing it
+  // from the account the invitation created, not just flipping a status
+  // column nothing still reads as "pending". This is the only automated
+  // check that the endpoint actually does that.
+  describe("revoke-invitation, bout en bout", () => {
+    const email = `agent-revoke13b-${Date.now()}@allin.test`;
+    let serviceRoleKey = "";
+    let admin: ReturnType<typeof createClient>;
+
+    beforeAll(() => {
+      // Same approach as the invite-user block above: read the key from the
+      // CLI instead of committing it, only to verify state and clean up
+      // afterwards -- every assertion still goes through the signed-in
+      // admin token like the rest of this file.
+      const output = execSync("npx supabase status -o env", { encoding: "utf-8" });
+      const match = output.match(/SERVICE_ROLE_KEY="([^"]+)"/);
+      if (!match) throw new Error("clé service_role introuvable dans `supabase status`");
+      serviceRoleKey = match[1];
+      admin = createClient(BASE_URL, serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+    });
+
+    afterAll(async () => {
+      // Runs even if the assertion below fails, so the suite stays
+      // re-runnable without a db:reset between runs.
+      if (!serviceRoleKey) return;
+      const { data: found } = await admin
+        .rpc("admin_find_user_by_email", { p_email: email })
+        .maybeSingle();
+      if (found?.user_id) {
+        await admin.auth.admin.deleteUser(found.user_id);
+      }
+      await admin.from("invitations").delete().eq("email", email);
+    });
+
+    it("révoquer une invitation acceptée désactive le compte et marque l'invitation revoked", async () => {
+      const inviteResponse = await call("invite-user", tokens[ADMIN_EMAIL], { email, role: "agent" });
+      const inviteBody = await inviteResponse.json();
+      expect(inviteResponse.status).toBe(200);
+      const invitationId = inviteBody.invitation_id;
+
+      const revokeResponse = await call("revoke-invitation", tokens[ADMIN_EMAIL], {
+        invitation_id: invitationId,
+      });
+      const revokeBody = await revokeResponse.json();
+      expect(revokeResponse.status).toBe(200);
+      expect(revokeBody.status).toBe("revoked");
+      expect(revokeBody.access_revoked).toBe(true);
+
+      const { data: account } = await admin
+        .rpc("admin_find_user_by_email", { p_email: email })
+        .maybeSingle();
+      const { data: profile } = await admin
+        .from("profiles")
+        .select("is_active")
+        .eq("id", account?.user_id)
+        .single();
+      expect(profile?.is_active).toBe(false);
+
+      const { data: invitation } = await admin
+        .from("invitations")
+        .select("status")
+        .eq("id", invitationId)
+        .single();
+      expect(invitation?.status).toBe("revoked");
+    });
+  });
 });

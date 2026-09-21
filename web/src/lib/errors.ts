@@ -11,7 +11,7 @@ const MESSAGES: Record<string, string> = {
   user_already_attached: "Cette personne a déjà un compte rattaché.",
   invitation_already_pending: "Une invitation est déjà en attente pour cette adresse.",
   cannot_modify_self: "Vous ne pouvez pas modifier votre propre rôle ni vous désactiver.",
-  no_pending_invitation: "Aucune invitation en attente pour cette personne.",
+  invitation_not_found: "Cette invitation est introuvable.",
   profile_not_found: "Ce profil est introuvable.",
   invalid_user_id: "L'identifiant utilisateur est invalide.",
   invalid_invitation_id: "L'identifiant de l'invitation est invalide.",

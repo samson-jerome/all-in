@@ -1,6 +1,37 @@
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { jsonResponse } from "./cors.ts";
 
+// Deactivates a profile and drops its sessions. Shared by admin-update-user
+// (deactivating an account) and revoke-invitation (withdrawing the access an
+// invitation created), so the two endpoints cannot drift into two slightly
+// different ways of doing the same thing. Error codes match what
+// admin-update-user already returned before this extraction -- the front
+// already translates them (see web/src/lib/errors.ts).
+export async function deactivateAccount(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<{ error: Response } | { ok: true }> {
+  const { error: updateError } = await admin
+    .from("profiles")
+    .update({ is_active: false })
+    .eq("id", userId);
+
+  if (updateError) {
+    return { error: jsonResponse(500, { error: "update_failed", detail: updateError.message }) };
+  }
+
+  // Deactivation already cuts data access through auth_role(); dropping the
+  // sessions also gets the person logged out of their browser.
+  const { error: revokeError } = await admin.rpc("admin_revoke_sessions", { p_user_id: userId });
+  if (revokeError) {
+    return {
+      error: jsonResponse(500, { error: "session_revoke_failed", detail: revokeError.message }),
+    };
+  }
+
+  return { ok: true };
+}
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
